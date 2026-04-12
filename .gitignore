@@ -1,0 +1,41 @@
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# Exclude sensitive environment info
+.env
+.env.*
+secrets.json
+tokens/
+
+# Build artifacts
+app/build/
+core-bridge/build/
+data/build/
+domain/build/
+*.apk
+*.ap_
+*.aab
+
+# Keystore
+*.jks
+*.keystore
+
+# Sandbox
+.jdk_sandbox/
+build_log.txt
+compile_log.txt
+final_log.txt
+build_pro.sh
