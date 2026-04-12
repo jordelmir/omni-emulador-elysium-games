@@ -8,6 +8,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -15,6 +17,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import com.elysium.console.data.CoreRepositoryImpl
+import com.elysium.console.data.SystemTelemetryProvider
 import com.elysium.console.domain.model.ExecutionType
 import com.elysium.console.domain.model.Platform
 import com.elysium.console.domain.model.RomFile
@@ -52,8 +55,24 @@ fun ElysiumNavGraph(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val hardwareMonitor = SystemTelemetryProvider(context)
     val coreRepository = CoreRepositoryImpl()
     val selectCoreUseCase = SelectCoreUseCase(coreRepository)
+
+    // Manual DI for ViewModels
+    val dashboardFactory = object : ViewModelProvider.Factory {
+        override fun <T : ViewModel> create(modelClass: Class<T>): T {
+            @Suppress("UNCHECKED_CAST")
+            return DashboardViewModel(hardwareMonitor) as T
+        }
+    }
+
+    val emulationFactory = object : ViewModelProvider.Factory {
+        override fun <T : ViewModel> create(modelClass: Class<T>): T {
+            @Suppress("UNCHECKED_CAST")
+            return EmulationViewModel(hardwareMonitor, selectCoreUseCase) as T
+        }
+    }
 
     NavHost(
         navController = navController,
@@ -61,7 +80,7 @@ fun ElysiumNavGraph(
         modifier = modifier
     ) {
         composable(Routes.DASHBOARD) {
-            val dashboardViewModel: DashboardViewModel = viewModel()
+            val dashboardViewModel: DashboardViewModel = viewModel(factory = dashboardFactory)
             DashboardScreen(
                 viewModel = dashboardViewModel,
                 onRomClick = { romPath ->
@@ -110,7 +129,7 @@ fun ElysiumNavGraph(
         ) { backStackEntry ->
             val encodedPath = backStackEntry.arguments?.getString("romPath").orEmpty()
             val romPath = URLDecoder.decode(encodedPath, "UTF-8")
-            val emulationViewModel: EmulationViewModel = viewModel()
+            val emulationViewModel: EmulationViewModel = viewModel(factory = emulationFactory)
 
             PlayerScreen(
                 romPath = romPath,

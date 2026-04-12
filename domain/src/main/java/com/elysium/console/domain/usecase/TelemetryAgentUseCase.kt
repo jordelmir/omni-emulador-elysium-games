@@ -11,6 +11,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
+import com.elysium.console.domain.repository.HardwareMonitor
+
 /**
  * Reactive telemetry agent that monitors emulation performance in real-time.
  *
@@ -23,6 +25,7 @@ import kotlinx.coroutines.launch
  * performance stays below/above thresholds for consecutive samples.
  */
 class TelemetryAgentUseCase(
+    private val hardwareMonitor: HardwareMonitor,
     private val fpsProvider: () -> Double,
     private val frameTimeProvider: () -> Double,
     private val cycleMultiplierSetter: (Float) -> Unit
@@ -73,17 +76,17 @@ class TelemetryAgentUseCase(
                 val fps = fpsProvider()
                 val frameTime = frameTimeProvider()
 
-                // Simulated CPU/RAM telemetry (realistic reactive values)
-                // In production, these would come from /proc/stat and ActivityManager
-                cpuSimulated = calculateSimulatedCpu(fps, frameTime, cpuSimulated)
-                ramSimulated = calculateSimulatedRam(ramSimulated)
+                // Real hardware telemetry
+                val cpuUsage = hardwareMonitor.getCpuUsage()
+                val ramUsage = hardwareMonitor.getUsedRamMb()
+                val thermal = hardwareMonitor.getThermalState(cpuUsage)
 
                 val data = TelemetryData(
                     fps = fps,
                     frameTimeMs = frameTime,
-                    cpuUsage = cpuSimulated,
-                    ramUsageMb = ramSimulated,
-                    thermalState = deriveThermalState(cpuSimulated)
+                    cpuUsage = cpuUsage,
+                    ramUsageMb = ramUsage,
+                    thermalState = thermal
                 )
 
                 _telemetry.value = data
@@ -148,26 +151,5 @@ class TelemetryAgentUseCase(
     private fun applyMultiplier() {
         _cycleAdjustment.value = currentMultiplier
         cycleMultiplierSetter(currentMultiplier)
-    }
-
-    private fun calculateSimulatedCpu(fps: Double, frameTime: Double, previous: Float): Float {
-        // CPU usage correlates inversely with headroom (frameTime vs budget)
-        val budget = if (targetFps > 0) 1000.0 / targetFps else 16.67
-        val load = if (budget > 0) (frameTime / budget * 100.0).toFloat() else 50f
-        // Smooth with EMA
-        return (previous * 0.7f + load.coerceIn(5f, 98f) * 0.3f)
-    }
-
-    private fun calculateSimulatedRam(previous: Float): Float {
-        // Simulate gradual RAM usage with slight variance
-        val base = 256f + (System.nanoTime() % 100) * 0.5f
-        return (previous * 0.95f + base * 0.05f)
-    }
-
-    private fun deriveThermalState(cpuUsage: Float): Int = when {
-        cpuUsage > 90f -> 3 // Critical
-        cpuUsage > 75f -> 2 // Hot
-        cpuUsage > 55f -> 1 // Warm
-        else -> 0           // Nominal
     }
 }

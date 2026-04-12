@@ -42,12 +42,18 @@ class RomRepositoryImpl : RomRepositoryContract {
     }
 
     /**
-     * Scans the default directories for ROM files.
+     * Scans the entire external storage for ROM files.
+     * Starts from the root to ensure no game is left behind.
      *
      * @return List of discovered ROM files with platform auto-detection
      */
     suspend fun scanForRoms(): List<RomFile> = withContext(Dispatchers.IO) {
-        scanDirectory("/storage/emulated/0/Roms")
+        val root = File("/storage/emulated/0")
+        val roms = mutableListOf<RomFile>()
+        if (root.exists() && root.isDirectory) {
+            scanDirectory(root, roms)
+        }
+        roms.sortedBy { it.name.lowercase() }
     }
 
     /**

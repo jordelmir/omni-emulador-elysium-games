@@ -14,6 +14,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import com.elysium.console.domain.repository.HardwareMonitor
+import com.elysium.console.domain.model.RomFile
+import com.elysium.console.domain.usecase.SelectCoreUseCase
 
 /**
  * ViewModel orchestrating the emulation session lifecycle.
@@ -26,7 +29,10 @@ import kotlinx.coroutines.launch
  * - Thread pinning to prime CPU cores
  * - Graceful shutdown and resource cleanup
  */
-class EmulationViewModel : ViewModel() {
+class EmulationViewModel(
+    private val hardwareMonitor: HardwareMonitor,
+    private val selectCoreUseCase: SelectCoreUseCase
+) : ViewModel() {
 
     private val _telemetry = MutableStateFlow(TelemetryData())
     val telemetry: StateFlow<TelemetryData> = _telemetry.asStateFlow()
@@ -37,6 +43,7 @@ class EmulationViewModel : ViewModel() {
     private var emulationJob: Job? = null
 
     private val telemetryAgent = TelemetryAgentUseCase(
+        hardwareMonitor = hardwareMonitor,
         fpsProvider = { ElysiumBridge.nativeGetFps() },
         frameTimeProvider = { ElysiumBridge.nativeGetFrameTime() },
         cycleMultiplierSetter = { multiplier ->
@@ -71,17 +78,13 @@ class EmulationViewModel : ViewModel() {
             // Pin to prime cores for maximum performance
             ElysiumBridge.nativePinThreads(null)
 
-            // Resolve the core to use based on the ROM extension
-            val extension = romPath.substringAfterLast('.', "").lowercase()
-            val coreName = when (extension) {
-                "smc", "sfc" -> "snes9x_libretro_android.so"
-                "gba", "gbc", "gb" -> "mgba_libretro_android.so"
-                "nds" -> "melonds_libretro_android.so"
-                "nes" -> "nestopia_libretro_android.so"
-                "md", "gen", "smd" -> "genesis_plus_gx_libretro_android.so"
-                "iso", "cso" -> "ppsspp_libretro_android.so" // Simple fallback for PSP
-                else -> "snes9x_libretro_android.so" // Default fallback
-            }
+            // Resolve the core to use based on the ROM file metadata
+            val dummyRom = RomFile(
+                id = "current", name = "current", path = romPath,
+                platform = Platform.ARCADE, fileSizeBytes = 0L, playCount = 0
+            )
+            val core = selectCoreUseCase(dummyRom)
+            val coreName = core?.libraryPath ?: "snes9x_libretro_android.so" // Default fallback
             
             // Construct full path to the bundled core (assuming they are in the native library path)
             // Wait, we need the app to pass the path to the extracted core. By default, JNI libraries 
