@@ -272,23 +272,56 @@ private:
         uniform vec2 uResolution;
         uniform int uEffectId;
 
+        // CRT Curve function
+        vec2 curve(vec2 uv) {
+            uv = (uv - 0.5) * 2.0;
+            uv *= 1.1;	
+            uv.x *= 1.0 + pow((abs(uv.y) / 5.0), 2.0);
+            uv.y *= 1.0 + pow((abs(uv.x) / 4.0), 2.0);
+            uv  = (uv / 2.0) + 0.5;
+            uv =  uv * 0.92 + 0.04;
+            return uv;
+        }
+
         void main() {
             vec2 uv = vTexCoord;
             
-            if (uEffectId == 1) { // 📺 Vanguard RETRO (CRT)
-                vec2 center = uv - 0.5;
-                float dist = dot(center, center);
-                uv = uv + center * dist * 0.05; // Lens distortion
+            if (uEffectId == 1) { // 📺 Vanguard RETRO (Professional CRT)
+                vec2 crtUV = curve(uv);
                 
-                if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
-                    discard;
+                // Bezel / Curvature border
+                if (crtUV.x < 0.0 || crtUV.x > 1.0 || crtUV.y < 0.0 || crtUV.y > 1.0) {
+                    gl_FragColor = vec4(0.01, 0.01, 0.01, 1.0);
+                    return;
                 }
 
-                vec4 color = texture2D(sTexture, uv);
-                float scanline = sin(uv.y * uResolution.y * 1.5) * 0.1 + 0.9;
-                color.rgb *= scanline;
-                color.rgb *= (1.0 - dist * 0.5); // Vignette
-                gl_FragColor = color;
+                // Subpixel RGB Shift (Chroma Bleed)
+                float offset = 0.0015;
+                vec3 color;
+                color.r = texture2D(sTexture, crtUV + vec2(offset, 0.0)).r;
+                color.g = texture2D(sTexture, crtUV).g;
+                color.b = texture2D(sTexture, crtUV - vec2(offset, 0.0)).b;
+
+                // 224p-tuned Scanlines
+                float scanline = sin(crtUV.y * 224.0 * 3.14159 * 2.0);
+                float scanlineWeight = 0.20;
+                color -= color * clamp(scanline * scanlineWeight + scanlineWeight, 0.0, 1.0);
+
+                // Phosphor Shadow Mask (Trinitron style)
+                float mask = mod(gl_FragCoord.x, 3.0);
+                if (mask < 1.0) { color.r *= 0.9; color.g *= 0.95; }
+                else if (mask < 2.0) { color.g *= 0.9; color.b *= 0.95; }
+                else { color.b *= 0.9; color.r *= 0.95; }
+
+                // Dynamic Vignette Compensation
+                vec2 center = crtUV - 0.5;
+                float dist = dot(center, center);
+                color *= 1.0 - (dist * 0.6);
+                
+                // Bloom compensation
+                color *= 1.25;
+
+                gl_FragColor = vec4(color, 1.0);
 
             } else if (uEffectId == 2) { // ✨ Vanguard MODERN (Sharp + Bloom)
                 vec4 centerCol = texture2D(sTexture, uv);
