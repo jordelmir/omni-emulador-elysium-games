@@ -47,24 +47,45 @@ fun SplashScreen(onAnimationFinished: () -> Unit) {
     val alpha = remember { Animatable(0f) }
     val scale = remember { Animatable(0.9f) }
     var statusText by remember { mutableStateOf("INITIALIZING BOOT LOADER...") }
-    val logs = listOf(
-        "CALIBRATING VANGUARD CORES...",
-        "SYNCHRONIZING JNI BRIDGE...",
-        "LOADING SHADER ENGINE...",
-        "GATHERING METADATA...",
-        "VANGUARD SYSTEM READY"
-    )
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val downloader = remember { com.elysium.console.data.downloader.CoreDownloader(context) }
 
     LaunchedEffect(Unit) {
         alpha.animateTo(1f, tween(1000, easing = LinearEasing))
         scale.animateTo(1.0f, tween(1500, easing = LinearEasing))
         
-        // Cycle through logs
-        logs.forEach { log ->
-            statusText = log
-            delay(400)
+        statusText = "CALIBRATING VANGUARD CORES..."
+        delay(400)
+        
+        val requiredCores = listOf("snes9x", "genesis_plus_gx", "mgba", "nestopia")
+        for (core in requiredCores) {
+            val installed = downloader.isCoreInstalled(core)
+            if (!installed) {
+                downloader.downloadCore(core).collect { state ->
+                    when (state) {
+                        is com.elysium.console.data.downloader.CoreDownloader.DownloadState.Connecting -> {
+                            statusText = "CONNECTING TO VANGUARD SERVERS..."
+                        }
+                        is com.elysium.console.data.downloader.CoreDownloader.DownloadState.Downloading -> {
+                            statusText = "DOWNLOADING CORE [$core]... ${state.progress.toInt()}%"
+                        }
+                        is com.elysium.console.data.downloader.CoreDownloader.DownloadState.Extracting -> {
+                            statusText = "EXTRACTING CORE ENGINE ($core)..."
+                        }
+                        is com.elysium.console.data.downloader.CoreDownloader.DownloadState.Error -> {
+                            statusText = "ERROR DOWNLOADING $core: ${state.message}"
+                            delay(2000)
+                        }
+                        is com.elysium.console.data.downloader.CoreDownloader.DownloadState.Success -> {
+                            statusText = "CORE $core INSTALLED."
+                            delay(200)
+                        }
+                    }
+                }
+            }
         }
         
+        statusText = "VANGUARD SYSTEM READY"
         delay(400)
         onAnimationFinished()
     }

@@ -119,6 +119,59 @@ fun PlayerScreen(
                         }
                     })
                     renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
+                    
+                    // Physical Bluetooth Controller Support
+                    isFocusable = true
+                    isFocusableInTouchMode = true
+                    requestFocus()
+                    
+                    setOnKeyListener { _, keyCode, event ->
+                        val pressed = event.action == android.view.KeyEvent.ACTION_DOWN
+                        val retroId = when (keyCode) {
+                            android.view.KeyEvent.KEYCODE_BUTTON_B -> 0 // Libretro B (South)
+                            android.view.KeyEvent.KEYCODE_BUTTON_X -> 1 // Libretro Y (West)
+                            android.view.KeyEvent.KEYCODE_BUTTON_SELECT -> 2
+                            android.view.KeyEvent.KEYCODE_BUTTON_START -> 3
+                            android.view.KeyEvent.KEYCODE_DPAD_UP -> 4
+                            android.view.KeyEvent.KEYCODE_DPAD_DOWN -> 5
+                            android.view.KeyEvent.KEYCODE_DPAD_LEFT -> 6
+                            android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> 7
+                            android.view.KeyEvent.KEYCODE_BUTTON_A -> 8 // Libretro A (East)
+                            android.view.KeyEvent.KEYCODE_BUTTON_Y -> 9 // Libretro X (North)
+                            android.view.KeyEvent.KEYCODE_BUTTON_L1 -> 10
+                            android.view.KeyEvent.KEYCODE_BUTTON_R1 -> 11
+                            android.view.KeyEvent.KEYCODE_BUTTON_L2 -> 12
+                            android.view.KeyEvent.KEYCODE_BUTTON_R2 -> 13
+                            android.view.KeyEvent.KEYCODE_BUTTON_THUMBL -> 14
+                            android.view.KeyEvent.KEYCODE_BUTTON_THUMBR -> 15
+                            else -> -1
+                        }
+                        
+                        if (retroId != -1) {
+                            com.elysium.console.bridge.ElysiumBridge.nativeSetButton(retroId, pressed)
+                            true // Event consumed
+                        } else {
+                            false
+                        }
+                    }
+
+                    // Analog Stick Support
+                    setOnGenericMotionListener { _, event ->
+                        if (event.isFromSource(android.view.InputDevice.SOURCE_JOYSTICK)) {
+                            val x = event.getAxisValue(android.view.MotionEvent.AXIS_X)
+                            val y = event.getAxisValue(android.view.MotionEvent.AXIS_Y)
+                            
+                            val threshold = 0.5f
+                            // Map Left Analog to D-Pad for classic games
+                            com.elysium.console.bridge.ElysiumBridge.nativeSetButton(6, x < -threshold) // LEFT
+                            com.elysium.console.bridge.ElysiumBridge.nativeSetButton(7, x > threshold)  // RIGHT
+                            com.elysium.console.bridge.ElysiumBridge.nativeSetButton(4, y < -threshold) // UP
+                            com.elysium.console.bridge.ElysiumBridge.nativeSetButton(5, y > threshold)  // DOWN
+                            true
+                        } else {
+                            false
+                        }
+                    }
                 }
             },
             modifier = Modifier.fillMaxSize()
