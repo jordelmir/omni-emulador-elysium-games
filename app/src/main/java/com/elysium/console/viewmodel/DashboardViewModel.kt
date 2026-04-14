@@ -15,6 +15,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import coil.ImageLoader
+import coil.request.ImageRequest
+import coil.request.SuccessResult
+import android.graphics.drawable.BitmapDrawable
+import androidx.palette.graphics.Palette
+import androidx.compose.ui.graphics.Color
 
 /**
  * ViewModel for the Dashboard screen.
@@ -59,23 +65,23 @@ class DashboardViewModel(
         viewModelScope.launch {
             try {
                 // Use Coil to get the bitmap directly
-                val loader = coil.ImageLoader.Builder(context).build()
-                val request = coil.request.ImageRequest.Builder(context)
+                val loader = ImageLoader.Builder(context).build()
+                val request = ImageRequest.Builder(context)
                     .data(rom.coverArtPath)
                     .allowHardware(false) // Required for Palette
                     .build()
                 
-                val result = (loader.execute(request) as? coil.request.SuccessResult)?.drawable
-                val bitmap = (result as? android.graphics.drawable.BitmapDrawable)?.bitmap
+                val result = (loader.execute(request) as? SuccessResult)?.drawable
+                val bitmap = (result as? BitmapDrawable)?.bitmap
 
                 bitmap?.let {
-                    androidx.palette.graphics.Palette.from(it).generate { palette ->
+                    Palette.from(it).generate { palette ->
                         val vibrant = palette?.vibrantSwatch?.rgb
                         val lightVibrant = palette?.lightVibrantSwatch?.rgb
                         if (vibrant != null) {
-                            _accentColor.value = androidx.compose.ui.graphics.Color(vibrant)
+                            _accentColor.value = Color(vibrant)
                         } else if (lightVibrant != null) {
-                            _accentColor.value = androidx.compose.ui.graphics.Color(lightVibrant)
+                            _accentColor.value = Color(lightVibrant)
                         }
                     }
                 }

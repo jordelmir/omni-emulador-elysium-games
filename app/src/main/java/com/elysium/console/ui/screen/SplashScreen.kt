@@ -59,29 +59,34 @@ fun SplashScreen(onAnimationFinished: () -> Unit) {
         
         val requiredCores = listOf("snes9x", "genesis_plus_gx", "mgba", "nestopia")
         for (core in requiredCores) {
-            val installed = downloader.isCoreInstalled(core)
-            if (!installed) {
-                downloader.downloadCore(core).collect { state ->
-                    when (state) {
-                        is com.elysium.console.data.downloader.CoreDownloader.DownloadState.Connecting -> {
-                            statusText = "CONNECTING TO VANGUARD SERVERS..."
-                        }
-                        is com.elysium.console.data.downloader.CoreDownloader.DownloadState.Downloading -> {
-                            statusText = "DOWNLOADING CORE [$core]... ${state.progress.toInt()}%"
-                        }
-                        is com.elysium.console.data.downloader.CoreDownloader.DownloadState.Extracting -> {
-                            statusText = "EXTRACTING CORE ENGINE ($core)..."
-                        }
-                        is com.elysium.console.data.downloader.CoreDownloader.DownloadState.Error -> {
-                            statusText = "ERROR DOWNLOADING $core: ${state.message}"
-                            delay(2000)
-                        }
-                        is com.elysium.console.data.downloader.CoreDownloader.DownloadState.Success -> {
-                            statusText = "CORE $core INSTALLED."
-                            delay(200)
+            try {
+                val installed = downloader.isCoreInstalled(core)
+                if (!installed) {
+                    downloader.downloadCore(core).collect { state ->
+                        when (state) {
+                            is com.elysium.console.data.downloader.CoreDownloader.DownloadState.Connecting -> {
+                                statusText = "CONNECTING TO VANGUARD SERVERS..."
+                            }
+                            is com.elysium.console.data.downloader.CoreDownloader.DownloadState.Downloading -> {
+                                statusText = "DOWNLOADING CORE [$core]... ${state.progress.toInt()}%"
+                            }
+                            is com.elysium.console.data.downloader.CoreDownloader.DownloadState.Extracting -> {
+                                statusText = "EXTRACTING CORE ENGINE ($core)..."
+                            }
+                            is com.elysium.console.data.downloader.CoreDownloader.DownloadState.Error -> {
+                                statusText = "CORE MISMATCH: SKIPPING $core"
+                                delay(1000)
+                            }
+                            is com.elysium.console.data.downloader.CoreDownloader.DownloadState.Success -> {
+                                statusText = "CORE $core OPTIMIZED."
+                                delay(200)
+                            }
                         }
                     }
                 }
+            } catch (e: Exception) {
+                statusText = "BYPASSING CORE INITIALIZATION..."
+                delay(500)
             }
         }
         

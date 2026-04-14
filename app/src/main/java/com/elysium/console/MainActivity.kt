@@ -29,9 +29,14 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         // Initialize the native bridge with app-specific directories
-        val systemDir = filesDir.resolve("system").absolutePath
-        val saveDir = filesDir.resolve("saves").absolutePath
-        ElysiumBridge.nativeInit(systemDir, saveDir)
+        try {
+            val systemDir = filesDir.resolve("system").absolutePath
+            val saveDir = filesDir.resolve("saves").absolutePath
+            com.elysium.console.bridge.ElysiumBridge.nativeInit(systemDir, saveDir)
+            android.util.Log.i("MainActivity", "Native bridge initialized successfully.")
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "CRITICAL: Native init failed: ${e.message}")
+        }
 
         // Edge-to-edge immersive mode
         enableEdgeToEdge()

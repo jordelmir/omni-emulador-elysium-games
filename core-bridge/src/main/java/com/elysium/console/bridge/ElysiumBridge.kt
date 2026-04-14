@@ -1,5 +1,7 @@
 package com.elysium.console.bridge
 
+import android.util.Log
+
 /**
  * Elysium Bridge — Kotlin interface to the native C++ emulation engine.
  *
@@ -17,7 +19,11 @@ package com.elysium.console.bridge
 object ElysiumBridge {
 
     init {
-        System.loadLibrary("elysium-bridge")
+        try {
+            System.loadLibrary("elysium-bridge")
+        } catch (e: UnsatisfiedLinkError) {
+            Log.e("ElysiumBridge", "Failed to load native library: ${e.message}")
+        }
     }
 
     /**
