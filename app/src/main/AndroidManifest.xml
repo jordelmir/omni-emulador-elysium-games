@@ -24,6 +24,8 @@
     <application
         android:name=".ElysiumApplication"
         android:allowBackup="true"
+        android:icon="@drawable/omni_elysium_logo"
+        android:roundIcon="@drawable/omni_elysium_logo"
         android:label="Omni Emulador Elysium Games"
         android:supportsRtl="true"
         android:theme="@style/Theme.ElysiumConsole"
