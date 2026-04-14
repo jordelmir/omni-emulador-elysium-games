@@ -1,0 +1,68 @@
+{
+  "games": [
+    {
+      "matchers": ["super mario world", "smw"],
+      "name": "Super Mario World",
+      "year": "1990",
+      "genre": "Platformer",
+      "description": "Mario's definitive 16-bit adventure across Dinosaur Land. A masterpiece of level design and gameplay mechanics.",
+      "coverUrl": "https://raw.githubusercontent.com/libretro/libretro-thumbnails/master/Nintendo%20-%20Super%20Nintendo%20Entertainment%20System/Named_Boxarts/Super%20Mario%20World%20(USA).png"
+    },
+    {
+      "matchers": ["zelda a link to the past", "alttp"],
+      "name": "The Legend of Zelda: A Link to the Past",
+      "year": "1991",
+      "genre": "Action-Adventure",
+      "description": "Link's epic journey between the Light and Dark worlds. Defined the action-adventure genre for generations.",
+      "coverUrl": "https://raw.githubusercontent.com/libretro/libretro-thumbnails/master/Nintendo%20-%20Super%20Nintendo%20Entertainment%20System/Named_Boxarts/Legend%20of%20Zelda%2C%20The%20-%20A%20Link%20to%20the%20Past%20(USA).png"
+    },
+    {
+      "matchers": ["metroid dread"],
+      "name": "Metroid Dread",
+      "year": "2021",
+      "genre": "Action",
+      "description": "The conclusion of the 2D Metroid saga. Intense atmosphere and precision combat.",
+      "coverUrl": "https://assets.nintendo.com/image/upload/f_auto/q_auto/v1/ncom/en_US/games/switch/m/metroid-dread-switch/hero"
+    },
+    {
+      "matchers": ["final fantasy vii", "ff7", "ffvii"],
+      "name": "Final Fantasy VII",
+      "year": "1997",
+      "genre": "RPG",
+      "description": "The game that changed the RPG landscape forever. Cloud Strife's battle against the Sephiroth and Shinra.",
+      "coverUrl": "https://raw.githubusercontent.com/libretro/libretro-thumbnails/master/Sony%20-%20PlayStation/Named_Boxarts/Final%20Fantasy%20VII%20(USA).png"
+    },
+    {
+      "matchers": ["crash bandicoot", "crash 1"],
+      "name": "Crash Bandicoot",
+      "year": "1996",
+      "genre": "Platformer",
+      "description": "Naughty Dog's 3D platforming breakthrough on the Original PlayStation.",
+      "coverUrl": "https://raw.githubusercontent.com/libretro/libretro-thumbnails/master/Sony%20-%20PlayStation/Named_Boxarts/Crash%20Bandicoot%20(USA).png"
+    },
+    {
+      "matchers": ["metal slug"],
+      "name": "Metal Slug",
+      "year": "1996",
+      "genre": "Run and Gun",
+      "description": "The pinnacle of 2D sprite-based run-and-gun combat. Stunning animations and explosive action.",
+      "coverUrl": "https://raw.githubusercontent.com/libretro/libretro-thumbnails/master/SNK%20-%20Neo%20Geo/Named_Boxarts/Metal%20Slug%20-%20Super%20Vehicle-001.png"
+    },
+    {
+      "matchers": ["street fighter ii", "sf2", "sfii"],
+      "name": "Street Fighter II",
+      "year": "1991",
+      "genre": "Fighting",
+      "description": "The absolute king of fighting games. World Warriors clash in the ultimate tournament.",
+      "coverUrl": "https://raw.githubusercontent.com/libretro/libretro-thumbnails/master/Nintendo%20-%20Super%20Nintendo%20Entertainment%20System/Named_Boxarts/Street%20Fighter%20II%20-%20The%20World%20Warrior%20(USA).png"
+    },
+    {
+      "matchers": ["chrono trigger"],
+      "name": "Chrono Trigger",
+      "year": "1995",
+      "genre": "RPG",
+      "description": "An timeless RPG classic developed by the 'Dream Team'. Journey across time to save the world.",
+      "coverUrl": "https://raw.githubusercontent.com/libretro/libretro-thumbnails/master/Nintendo%20-%20Super%20Nintendo%20Entertainment%20System/Named_Boxarts/Chrono%20Trigger%20(USA).png"
+    }
+  ]
+}

@@ -8,10 +8,15 @@
 #include <android/hardware_buffer_jni.h>
 #include <dlfcn.h>
 #include <string.h>
+#include <stdio.h>
+#include <stdarg.h>
 #include <time.h>
 #include <atomic>
 #include <mutex>
 #include <type_traits>
+#include <unordered_map>
+#include <string>
+#include <vector>
 
 #include "libretro.h"
 #include "thread_utils.h"
@@ -22,6 +27,7 @@
 #define TAG "ElysiumBridge"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
+#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
 
 // Forward declarations for Haptic Core (Libretro Rumble)
 #define RETRO_ENVIRONMENT_GET_RUMBLE_INTERFACE 38
@@ -30,6 +36,24 @@ struct retro_rumble_interface { bool (*set_rumble_state)(unsigned port, enum ret
 
 extern "C" {
 bool core_set_rumble_state(unsigned port, enum retro_rumble_effect effect, uint16_t strength);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Libretro Log Callback — Routes core logs to Android Logcat
+// ═══════════════════════════════════════════════════════════════
+static void elysium_log_printf(enum retro_log_level level, const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    int prio = ANDROID_LOG_INFO;
+    switch (level) {
+        case RETRO_LOG_DEBUG: prio = ANDROID_LOG_DEBUG; break;
+        case RETRO_LOG_INFO:  prio = ANDROID_LOG_INFO;  break;
+        case RETRO_LOG_WARN:  prio = ANDROID_LOG_WARN;  break;
+        case RETRO_LOG_ERROR: prio = ANDROID_LOG_ERROR; break;
+        default: break;
+    }
+    __android_log_vprint(prio, "LibretroCore", fmt, args);
+    va_end(args);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -68,6 +92,7 @@ elysium::InputManager g_inputManager;
 std::atomic<float> g_cycleMultiplier{1.0f};
 std::atomic<double> g_currentFps{0.0};
 std::atomic<double> g_frameTimeMs{0.0};
+std::atomic<double> g_targetFps{60.0};
 struct timespec g_lastFrameTime = {0, 0};
 double g_fpsAccumulator = 0.0;
 int g_fpsSampleCount = 0;
@@ -75,6 +100,20 @@ int g_fpsSampleCount = 0;
 unsigned g_pixelFormat = RETRO_PIXEL_FORMAT_RGB565;
 char g_systemDir[512] = "";
 char g_saveDir[512] = "";
+
+// ── Core Variable System ────────────────────────────────────
+// Stores key/value pairs set by cores via SET_VARIABLES/GET_VARIABLE.
+// This is CRITICAL for core compatibility — without it, cores cannot
+// configure their internal settings and may produce black screens.
+std::unordered_map<std::string, std::string> g_coreVariables;
+std::unordered_map<std::string, std::string> g_coreVariableDefaults;
+std::atomic<bool> g_variablesChanged{false};
+std::mutex g_variablesMutex;
+
+// ── Pixel Conversion Buffer ─────────────────────────────────
+// Pre-allocated buffer for format conversion (RGB565/0RGB1555 → RGBA8888).
+// This avoids per-frame heap allocation.
+std::vector<uint32_t> g_conversionBuffer;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -82,11 +121,21 @@ char g_saveDir[512] = "";
 // ═══════════════════════════════════════════════════════════════
 
 static bool elysium_environment(unsigned cmd, void* data) {
-    switch (cmd) {
+    // Strip the EXPERIMENTAL flag bit that some cores set
+    unsigned masked = cmd & 0xFF;
+
+    switch (masked) {
+        // ── Pixel Format Negotiation ────────────────────────
         case RETRO_ENVIRONMENT_SET_PIXEL_FORMAT: {
-            g_pixelFormat = *static_cast<const unsigned*>(data);
+            unsigned fmt = *static_cast<const unsigned*>(data);
+            g_pixelFormat = fmt;
+            LOGI("Core requested pixel format: %s",
+                 fmt == RETRO_PIXEL_FORMAT_XRGB8888 ? "XRGB8888" :
+                 fmt == RETRO_PIXEL_FORMAT_RGB565 ? "RGB565" : "0RGB1555");
             return true;
         }
+
+        // ── Directory Queries ───────────────────────────────
         case RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY: {
             *static_cast<const char**>(data) = g_systemDir;
             return true;
@@ -95,18 +144,255 @@ static bool elysium_environment(unsigned cmd, void* data) {
             *static_cast<const char**>(data) = g_saveDir;
             return true;
         }
-        case RETRO_ENVIRONMENT_GET_RUMBLE_INTERFACE: {
-            auto* interface = (struct retro_rumble_interface*)data;
-            interface->set_rumble_state = core_set_rumble_state;
+        case RETRO_ENVIRONMENT_GET_CORE_ASSETS_DIRECTORY: {
+            *static_cast<const char**>(data) = g_systemDir;
             return true;
         }
-        default: return false;
+        case RETRO_ENVIRONMENT_GET_LIBRETRO_PATH: {
+            *static_cast<const char**>(data) = nullptr;
+            return true;
+        }
+
+        // ── Core Capabilities ───────────────────────────────
+        case RETRO_ENVIRONMENT_GET_CAN_DUPE: {
+            // CRITICAL: Most cores REQUIRE this to be true.
+            // Without it, they will refuse to dupe frames and
+            // may send NULL data every other frame → flickering.
+            *static_cast<bool*>(data) = true;
+            return true;
+        }
+        case RETRO_ENVIRONMENT_GET_OVERSCAN: {
+            *static_cast<bool*>(data) = false;
+            return true;
+        }
+        case RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME: {
+            return true; // Acknowledge but don't need to act
+        }
+        case RETRO_ENVIRONMENT_SET_SUPPORT_ACHIEVEMENTS: {
+            return false; // Not supported
+        }
+        case RETRO_ENVIRONMENT_GET_INPUT_BITMASKS: {
+            return true; // We support input bitmasks
+        }
+
+        // ── Variable System (CRITICAL for compatibility) ────
+        case RETRO_ENVIRONMENT_SET_VARIABLES: {
+            // Core is registering its configuration options.
+            // Parse the key/value pairs and store defaults.
+            const struct retro_variable* vars = static_cast<const struct retro_variable*>(data);
+            std::lock_guard<std::mutex> lock(g_variablesMutex);
+            while (vars && vars->key) {
+                std::string key = vars->key;
+                std::string fullValue = vars->value ? vars->value : "";
+                // Value format: "Description; option1|option2|option3"
+                // Default is the first option after the semicolon
+                size_t semicolon = fullValue.find(';');
+                if (semicolon != std::string::npos) {
+                    std::string options = fullValue.substr(semicolon + 2);
+                    size_t pipe = options.find('|');
+                    std::string defaultVal = (pipe != std::string::npos)
+                        ? options.substr(0, pipe)
+                        : options;
+                    g_coreVariableDefaults[key] = defaultVal;
+                    // Only set if not already overridden
+                    if (g_coreVariables.find(key) == g_coreVariables.end()) {
+                        g_coreVariables[key] = defaultVal;
+                    }
+                    LOGI("Core variable: %s = %s", key.c_str(), g_coreVariables[key].c_str());
+                }
+                vars++;
+            }
+            g_variablesChanged.store(true, std::memory_order_relaxed);
+            return true;
+        }
+        case RETRO_ENVIRONMENT_GET_VARIABLE: {
+            struct retro_variable* var = static_cast<struct retro_variable*>(data);
+            if (!var || !var->key) return false;
+            std::lock_guard<std::mutex> lock(g_variablesMutex);
+            auto it = g_coreVariables.find(var->key);
+            if (it != g_coreVariables.end()) {
+                var->value = it->second.c_str();
+                return true;
+            }
+            var->value = nullptr;
+            return false;
+        }
+        case RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE: {
+            bool* updated = static_cast<bool*>(data);
+            *updated = g_variablesChanged.exchange(false, std::memory_order_relaxed);
+            return true;
+        }
+
+        // ── Logging Interface ───────────────────────────────
+        case RETRO_ENVIRONMENT_GET_LOG_INTERFACE: {
+            struct retro_log_callback* cb = static_cast<struct retro_log_callback*>(data);
+            cb->log = elysium_log_printf;
+            return true;
+        }
+
+        // ── Input Descriptors ───────────────────────────────
+        case RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS: {
+            // Acknowledge — we don't need to store these but must
+            // return true so the core knows we received them.
+            return true;
+        }
+        case RETRO_ENVIRONMENT_SET_CONTROLLER_INFO: {
+            return true; // Acknowledge
+        }
+        case RETRO_ENVIRONMENT_GET_INPUT_DEVICE_CAPABILITIES: {
+            // Report that we support joypad only
+            uint64_t* caps = static_cast<uint64_t*>(data);
+            *caps = (1 << RETRO_DEVICE_JOYPAD);
+            return true;
+        }
+
+        // ── Haptic Core ─────────────────────────────────────
+        case RETRO_ENVIRONMENT_GET_RUMBLE_INTERFACE: {
+            auto* iface = static_cast<struct retro_rumble_interface*>(data);
+            iface->set_rumble_state = core_set_rumble_state;
+            return true;
+        }
+
+        // ── Language & Region ───────────────────────────────
+        case RETRO_ENVIRONMENT_GET_LANGUAGE: {
+            unsigned* lang = static_cast<unsigned*>(data);
+            *lang = RETRO_LANGUAGE_SPANISH;
+            return true;
+        }
+
+        // ── Geometry & AV Changes ───────────────────────────
+        case RETRO_ENVIRONMENT_SET_GEOMETRY: {
+            const struct retro_game_geometry {
+                unsigned base_width, base_height, max_width, max_height;
+                float aspect_ratio;
+            }* geom = static_cast<const struct retro_game_geometry*>(data);
+            LOGI("Core geometry change: %ux%u", geom->base_width, geom->base_height);
+            return true;
+        }
+        case RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO: {
+            return true; // Acknowledge mid-game AV changes
+        }
+
+        // ── Performance & Memory ────────────────────────────
+        case RETRO_ENVIRONMENT_SET_PERFORMANCE_LEVEL: {
+            return true; // Acknowledge
+        }
+        case RETRO_ENVIRONMENT_SET_MEMORY_MAPS: {
+            return true; // Acknowledge
+        }
+        case RETRO_ENVIRONMENT_SET_SERIALIZATION_QUIRKS: {
+            return true;
+        }
+        case RETRO_ENVIRONMENT_GET_PERF_INTERFACE: {
+            return false; // Performance counters not implemented
+        }
+
+        // ── Messages ────────────────────────────────────────
+        case RETRO_ENVIRONMENT_SET_MESSAGE: {
+            struct retro_message { const char* msg; unsigned frames; };
+            const struct retro_message* msg = static_cast<const struct retro_message*>(data);
+            if (msg && msg->msg) {
+                LOGI("Core message: %s", msg->msg);
+            }
+            return true;
+        }
+        case RETRO_ENVIRONMENT_SET_ROTATION: {
+            return true;
+        }
+        case RETRO_ENVIRONMENT_SHUTDOWN: {
+            LOGI("Core requested shutdown");
+            return true;
+        }
+
+        default:
+            LOGW("Unhandled environment cmd: %u (raw: %u)", masked, cmd);
+            return false;
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Pixel Format Conversion Engine
+// ═══════════════════════════════════════════════════════════════
+// Converts all libretro pixel formats to RGBA8888 which is what
+// AHardwareBuffer expects. Without this, any core using RGB565
+// (the default for most 8/16-bit cores) produces a BLACK SCREEN.
+
+static const void* elysium_convert_frame(const void* data, unsigned width, unsigned height, size_t pitch) {
+    if (g_pixelFormat == RETRO_PIXEL_FORMAT_XRGB8888) {
+        // XRGB8888 → RGBA8888: just need to set alpha to 0xFF
+        size_t totalPixels = (size_t)width * height;
+        if (g_conversionBuffer.size() < totalPixels) {
+            g_conversionBuffer.resize(totalPixels);
+        }
+        const uint8_t* src = static_cast<const uint8_t*>(data);
+        for (unsigned y = 0; y < height; ++y) {
+            const uint32_t* srcRow = reinterpret_cast<const uint32_t*>(src + y * pitch);
+            uint32_t* dstRow = &g_conversionBuffer[y * width];
+            for (unsigned x = 0; x < width; ++x) {
+                uint32_t px = srcRow[x]; // 0xXXRRGGBB
+                uint8_t r = (px >> 16) & 0xFF;
+                uint8_t g = (px >> 8)  & 0xFF;
+                uint8_t b = px         & 0xFF;
+                dstRow[x] = (0xFF << 24) | (b << 16) | (g << 8) | r; // ABGR for RGBA8888 layout
+            }
+        }
+        return g_conversionBuffer.data();
+    }
+    else if (g_pixelFormat == RETRO_PIXEL_FORMAT_RGB565) {
+        // RGB565 → RGBA8888
+        size_t totalPixels = (size_t)width * height;
+        if (g_conversionBuffer.size() < totalPixels) {
+            g_conversionBuffer.resize(totalPixels);
+        }
+        const uint8_t* src = static_cast<const uint8_t*>(data);
+        for (unsigned y = 0; y < height; ++y) {
+            const uint16_t* srcRow = reinterpret_cast<const uint16_t*>(src + y * pitch);
+            uint32_t* dstRow = &g_conversionBuffer[y * width];
+            for (unsigned x = 0; x < width; ++x) {
+                uint16_t px = srcRow[x];
+                uint8_t r = ((px >> 11) & 0x1F) << 3;
+                uint8_t g = ((px >> 5)  & 0x3F) << 2;
+                uint8_t b = (px         & 0x1F) << 3;
+                // Fill lower bits for accurate color reproduction
+                r |= r >> 5;
+                g |= g >> 6;
+                b |= b >> 5;
+                dstRow[x] = (0xFF << 24) | (b << 16) | (g << 8) | r;
+            }
+        }
+        return g_conversionBuffer.data();
+    }
+    else { // RETRO_PIXEL_FORMAT_0RGB1555
+        // 0RGB1555 → RGBA8888
+        size_t totalPixels = (size_t)width * height;
+        if (g_conversionBuffer.size() < totalPixels) {
+            g_conversionBuffer.resize(totalPixels);
+        }
+        const uint8_t* src = static_cast<const uint8_t*>(data);
+        for (unsigned y = 0; y < height; ++y) {
+            const uint16_t* srcRow = reinterpret_cast<const uint16_t*>(src + y * pitch);
+            uint32_t* dstRow = &g_conversionBuffer[y * width];
+            for (unsigned x = 0; x < width; ++x) {
+                uint16_t px = srcRow[x];
+                uint8_t r = ((px >> 10) & 0x1F) << 3;
+                uint8_t g = ((px >> 5)  & 0x1F) << 3;
+                uint8_t b = (px         & 0x1F) << 3;
+                r |= r >> 5;
+                g |= g >> 5;
+                b |= b >> 5;
+                dstRow[x] = (0xFF << 24) | (b << 16) | (g << 8) | r;
+            }
+        }
+        return g_conversionBuffer.data();
     }
 }
 
 static void elysium_video_refresh(const void* data, unsigned width, unsigned height, size_t pitch) {
     if (data && g_renderer.isInitialized()) {
-        g_renderer.updateFrame(data, width, height, pitch);
+        // Convert pixel format to RGBA8888 before passing to renderer
+        const void* rgbaData = elysium_convert_frame(data, width, height, pitch);
+        // After conversion, pitch is always width * 4 (RGBA8888)
+        g_renderer.updateFrame(rgbaData, width, height, width * 4);
     }
 
     struct timespec now;
@@ -160,15 +446,31 @@ Java_com_elysium_console_bridge_ElysiumBridge_nativeInit(JNIEnv* env, jobject th
 JNIEXPORT jboolean JNICALL
 Java_com_elysium_console_bridge_ElysiumBridge_nativeLoadCore(JNIEnv* env, jobject thiz, jstring corePath) {
     if (g_coreHandle) dlclose(g_coreHandle);
+
+    // Clear stale state from previous core session
+    {
+        std::lock_guard<std::mutex> lock(g_variablesMutex);
+        g_coreVariables.clear();
+        g_coreVariableDefaults.clear();
+    }
+    g_variablesChanged.store(false, std::memory_order_relaxed);
+    g_pixelFormat = RETRO_PIXEL_FORMAT_RGB565; // Reset to default
+    g_conversionBuffer.clear();
+    g_inputManager.reset();
+
     const char* path = env->GetStringUTFChars(corePath, nullptr);
+    LOGI("Loading core: %s", path);
     g_coreHandle = dlopen(path, RTLD_LAZY);
+    if (!g_coreHandle) {
+        LOGE("dlopen failed: %s", dlerror());
+    }
     env->ReleaseStringUTFChars(corePath, path);
     if (!g_coreHandle) return JNI_FALSE;
 
     bool ok = true;
     auto load = [&](auto& ptr, const char* name) {
         ptr = reinterpret_cast<std::remove_reference_t<decltype(ptr)>>(dlsym(g_coreHandle, name));
-        if (!ptr) ok = false;
+        if (!ptr) { LOGE("Missing symbol: %s", name); ok = false; }
     };
 
     load(g_retro_init, "retro_init");
@@ -192,6 +494,7 @@ Java_com_elysium_console_bridge_ElysiumBridge_nativeLoadCore(JNIEnv* env, jobjec
 
     if (!ok) return JNI_FALSE;
 
+    // Set callbacks BEFORE init — some cores call environment during init
     g_retro_set_environment(elysium_environment);
     g_retro_set_video_refresh(elysium_video_refresh);
     g_retro_set_audio_sample(elysium_audio_sample);
@@ -200,6 +503,7 @@ Java_com_elysium_console_bridge_ElysiumBridge_nativeLoadCore(JNIEnv* env, jobjec
     g_retro_set_input_state(elysium_input_state);
     g_retro_init();
 
+    LOGI("Core loaded successfully. API version: %u", g_retro_api_version());
     return JNI_TRUE;
 }
 
@@ -213,15 +517,38 @@ Java_com_elysium_console_bridge_ElysiumBridge_nativeLoadRom(JNIEnv* env, jobject
         env->ReleaseStringUTFChars(romPath, path);
     }
 
+    LOGI("Loading ROM: %s (fd: %d, pixel format: %u)", finalPath, fd, g_pixelFormat);
+
     retro_game_info gameInfo = { finalPath, nullptr, 0, nullptr };
-    if (!g_retro_load_game(&gameInfo)) return JNI_FALSE;
+    if (!g_retro_load_game(&gameInfo)) {
+        LOGE("retro_load_game FAILED for: %s", finalPath);
+        return JNI_FALSE;
+    }
 
     retro_system_av_info av;
     g_retro_get_system_av_info(&av);
+
+    LOGI("AV Info — Resolution: %ux%u (max %ux%u), FPS: %.2f, Sample Rate: %.0f",
+         av.geometry.base_width, av.geometry.base_height,
+         av.geometry.max_width, av.geometry.max_height,
+         av.timing.fps, av.timing.sample_rate);
+
+    // Store target FPS for frame pacing
+    g_targetFps.store(av.timing.fps, std::memory_order_relaxed);
+
     g_renderer.initialize(av.geometry.max_width, av.geometry.max_height);
     g_audioEngine.initialize(static_cast<int>(av.timing.sample_rate));
 
+    LOGI("ROM loaded. Pixel format: %s",
+         g_pixelFormat == RETRO_PIXEL_FORMAT_XRGB8888 ? "XRGB8888" :
+         g_pixelFormat == RETRO_PIXEL_FORMAT_RGB565 ? "RGB565" : "0RGB1555");
+
     return JNI_TRUE;
+}
+
+JNIEXPORT jdouble JNICALL
+Java_com_elysium_console_bridge_ElysiumBridge_nativeGetTargetFps(JNIEnv* env, jobject thiz) {
+    return g_targetFps.load(std::memory_order_relaxed);
 }
 
 JNIEXPORT void JNICALL
@@ -284,6 +611,11 @@ Java_com_elysium_console_bridge_ElysiumBridge_nativeSetVisualEffect(JNIEnv* env,
 JNIEXPORT void JNICALL
 Java_com_elysium_console_bridge_ElysiumBridge_nativeSetUpscaler(JNIEnv* env, jobject thiz, jint mode) {
     g_renderer.setUpscaleMode(mode);
+}
+
+JNIEXPORT void JNICALL
+Java_com_elysium_console_bridge_ElysiumBridge_nativeRenderFrame(JNIEnv* env, jobject thiz, jint width, jint height) {
+    g_renderer.render(width, height);
 }
 
 JNIEXPORT void JNICALL

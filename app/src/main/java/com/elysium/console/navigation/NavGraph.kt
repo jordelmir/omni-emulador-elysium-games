@@ -87,7 +87,7 @@ fun ElysiumNavGraph(
     val emulationFactory = object : ViewModelProvider.Factory {
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             @Suppress("UNCHECKED_CAST")
-            return EmulationViewModel(context, hardwareMonitor, selectCoreUseCase) as T
+            return EmulationViewModel(context, hardwareMonitor, selectCoreUseCase, settingsManager) as T
         }
     }
 

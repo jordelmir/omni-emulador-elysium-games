@@ -2,16 +2,18 @@ package com.elysium.console.ui.screen
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -23,8 +25,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -38,15 +44,28 @@ import kotlinx.coroutines.delay
  */
 @Composable
 fun SplashScreen(onAnimationFinished: () -> Unit) {
-    var startAnimation by remember { mutableStateOf(false) }
     val alpha = remember { Animatable(0f) }
-    val scale = remember { Animatable(0.8f) }
+    val scale = remember { Animatable(0.9f) }
+    var statusText by remember { mutableStateOf("INITIALIZING BOOT LOADER...") }
+    val logs = listOf(
+        "CALIBRATING VANGUARD CORES...",
+        "SYNCHRONIZING JNI BRIDGE...",
+        "LOADING SHADER ENGINE...",
+        "GATHERING METADATA...",
+        "VANGUARD SYSTEM READY"
+    )
 
     LaunchedEffect(Unit) {
-        startAnimation = true
         alpha.animateTo(1f, tween(1000, easing = LinearEasing))
-        scale.animateTo(1.1f, tween(1500, easing = LinearEasing))
-        delay(500)
+        scale.animateTo(1.0f, tween(1500, easing = LinearEasing))
+        
+        // Cycle through logs
+        logs.forEach { log ->
+            statusText = log
+            delay(400)
+        }
+        
+        delay(400)
         onAnimationFinished()
     }
 
@@ -56,43 +75,73 @@ fun SplashScreen(onAnimationFinished: () -> Unit) {
             .background(DeepBlack),
         contentAlignment = Alignment.Center
     ) {
+        // Ambient background glow
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .drawBehind {
+                    drawRect(
+                        brush = Brush.radialGradient(
+                            colors = listOf(NeonGreen.copy(alpha = 0.05f), Color.Transparent),
+                            radius = size.width
+                        )
+                    )
+                }
+        )
+
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            // Placeholder for Logo / Symbol
-            Box(
+            // Logo
+            Image(
+                painter = painterResource(id = com.elysium.console.R.drawable.omni_elysium_logo),
+                contentDescription = "Logo",
                 modifier = Modifier
-                    .size(120.dp)
+                    .size(160.dp)
                     .scale(scale.value)
                     .alpha(alpha.value)
-                    .background(NeonGreen.copy(alpha = 0.1f), shape = androidx.compose.foundation.shape.CircleShape),
-                contentAlignment = Alignment.Center
-            ) {
+            )
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            // Technical HUD
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.alpha(alpha.value)) {
                 Text(
-                    text = "Ω",
-                    style = MaterialTheme.typography.displayLarge.copy(
+                    text = statusText,
+                    style = MaterialTheme.typography.labelSmall.copy(
                         color = NeonGreen,
-                        fontSize = 80.sp,
+                        letterSpacing = 2.sp,
                         fontWeight = FontWeight.Bold
                     )
                 )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Scanning bar
+                Box(
+                    modifier = Modifier
+                        .width(200.dp)
+                        .height(2.dp)
+                        .background(Color.White.copy(alpha = 0.1f))
+                ) {
+                    val progress = remember { Animatable(0f) }
+                    LaunchedEffect(Unit) {
+                        progress.animateTo(1f, tween(2500, easing = LinearEasing))
+                    }
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(progress.value)
+                            .fillMaxHeight()
+                            .background(NeonGreen)
+                    )
+                }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(48.dp))
 
             Text(
-                text = "OMNI ELYSIUM",
-                style = MaterialTheme.typography.headlineLarge.copy(
-                    color = Color.White,
-                    letterSpacing = 8.sp,
-                    fontWeight = FontWeight.Light
-                ),
-                modifier = Modifier.alpha(alpha.value)
-            )
-
-            Text(
-                text = "VANGUARD EDITION",
+                text = "ULTRA EDITION",
                 style = MaterialTheme.typography.labelMedium.copy(
-                    color = NeonGreen,
-                    letterSpacing = 2.sp
+                    color = Color.White.copy(alpha = 0.4f),
+                    letterSpacing = 4.sp
                 ),
                 modifier = Modifier.alpha(alpha.value)
             )

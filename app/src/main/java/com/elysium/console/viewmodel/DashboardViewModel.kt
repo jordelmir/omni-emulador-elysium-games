@@ -39,9 +39,51 @@ class DashboardViewModel(
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
+    private val _accentColor = MutableStateFlow(com.elysium.console.ui.theme.NeonGreen)
+    val accentColor: StateFlow<androidx.compose.ui.graphics.Color> = _accentColor.asStateFlow()
+
     init {
         refreshLibrary()
         startRealTelemetryMonitoring()
+    }
+
+    /**
+     * Updates the dynamic accent color based on the provided ROM's boxart.
+     */
+    fun updateAccentColor(context: android.content.Context, rom: RomFile) {
+        if (rom.coverArtPath.isBlank()) {
+            _accentColor.value = com.elysium.console.ui.theme.NeonGreen
+            return
+        }
+
+        viewModelScope.launch {
+            try {
+                // Use Coil to get the bitmap directly
+                val loader = coil.ImageLoader(context)
+                val request = coil.request.ImageRequest.Builder(context)
+                    .data(rom.coverArtPath)
+                    .allowHardware(false) // Required for Palette
+                    .build()
+                
+                val result = (loader.execute(request) as? coil.request.SuccessResult)?.drawable
+                val bitmap = (result as? android.graphics.drawable.BitmapDrawable)?.bitmap
+
+                bitmap?.let {
+                    androidx.palette.graphics.Palette.from(it).generate { palette ->
+                        val vibrant = palette?.vibrantSwatch?.rgb
+                        val lightVibrant = palette?.lightVibrantSwatch?.rgb
+                        if (vibrant != null) {
+                            _accentColor.value = androidx.compose.ui.graphics.Color(vibrant)
+                        } else if (lightVibrant != null) {
+                            _accentColor.value = androidx.compose.ui.graphics.Color(lightVibrant)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                // Fallback to default
+                _accentColor.value = com.elysium.console.ui.theme.NeonGreen
+            }
+        }
     }
 
     /**

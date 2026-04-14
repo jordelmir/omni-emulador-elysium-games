@@ -19,6 +19,15 @@ import java.security.MessageDigest
  */
 class RomRepositoryImpl(private val context: Context) : RomRepositoryContract {
 
+    init {
+        try {
+            val json = context.assets.open("data/games_db.json").bufferedReader().use { it.readText() }
+            MetadataScraper.loadDatabase(json)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to load offline metadata DB: ${e.message}")
+        }
+    }
+
     companion object {
         private const val TAG = "RomRepository"
         private const val MIN_GAME_SIZE_BYTES = 8 * 1024L 

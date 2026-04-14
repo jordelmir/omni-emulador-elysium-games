@@ -69,7 +69,9 @@ fun PlayerScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val telemetry by viewModel.telemetry.collectAsState()
+    val activePlatform by viewModel.activePlatform.collectAsState()
     var showHud by remember { mutableStateOf(true) }
     var isPaused by remember { mutableStateOf(false) }
 
@@ -98,28 +100,48 @@ fun PlayerScreen(
                 GLSurfaceView(context).apply {
                     setEGLContextClientVersion(3)
                     setRenderer(object : GLSurfaceView.Renderer {
+                        private var viewWidth = 0
+                        private var viewHeight = 0
+
                         override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
-                            // Clear to DeepBlack (0x08, 0x08, 0x08)
-                            android.opengl.GLES30.glClearColor(
-                                0.031f, 0.031f, 0.031f, 1.0f
-                            )
+                            android.opengl.GLES30.glClearColor(0.031f, 0.031f, 0.031f, 1.0f)
                         }
 
                         override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
                             android.opengl.GLES30.glViewport(0, 0, width, height)
+                            viewWidth = width
+                            viewHeight = height
                         }
 
                         override fun onDrawFrame(gl: GL10?) {
-                            android.opengl.GLES30.glClear(
-                                android.opengl.GLES30.GL_COLOR_BUFFER_BIT
-                            )
-                            // In production: bind the AHardwareBuffer texture
-                            // from ElysiumBridge and render a fullscreen quad.
-                            // The texture ID is obtained via
-                            // HardwareBufferRenderer::getTextureId()
+                            android.opengl.GLES30.glClear(android.opengl.GLES30.GL_COLOR_BUFFER_BIT)
+                            com.elysium.console.bridge.ElysiumBridge.nativeRenderFrame(viewWidth, viewHeight)
                         }
                     })
                     renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
+                }
+            },
+            modifier = Modifier.fillMaxSize()
+        )
+
+        // Vanguard Virtual Gamepad (Always visible for gameplay)
+        com.elysium.console.ui.component.VanguardGamepad(
+            platform = activePlatform ?: com.elysium.console.domain.model.Platform.ARCADE,
+            onButtonEvent = { id, pressed ->
+                // Native Input Sync
+                com.elysium.console.bridge.ElysiumBridge.nativeSetButton(id, pressed)
+                
+                // Synchronized Haptics
+                if (pressed) {
+                    try {
+                        val vibrator = context.getSystemService(android.os.Vibrator::class.java)
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                            vibrator?.vibrate(android.os.VibrationEffect.createOneShot(10, 80))
+                        } else {
+                            @Suppress("DEPRECATION")
+                            vibrator?.vibrate(10)
+                        }
+                    } catch (e: Exception) { /* Silent fail */ }
                 }
             },
             modifier = Modifier.fillMaxSize()
@@ -159,38 +181,12 @@ fun PlayerScreen(
                         )
                     }
 
-                    // FPS indicator
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(6.dp)
-                                .background(
-                                    color = when {
-                                        telemetry.fps >= 55 -> NeonGreen
-                                        telemetry.fps >= 30 -> Color(0xFFFFB800)
-                                        else -> Color(0xFFFF5252)
-                                    },
-                                    shape = CircleShape
-                                )
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "%.0f FPS".format(telemetry.fps),
-                            style = MaterialTheme.typography.labelLarge.copy(
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp
-                            )
-                        )
-                        Spacer(modifier = Modifier.width(16.dp))
-                        Text(
-                            text = "%.1f ms".format(telemetry.frameTimeMs),
-                            style = MaterialTheme.typography.bodyMedium.copy(
-                                color = TextSecondary
-                            )
-                        )
-                    }
+                    // VANGUARD HUD (OSD)
+                    com.elysium.console.ui.component.VanguardHud(
+                        telemetry = telemetry,
+                        shaderProfile = viewModel.getActiveShaderName(),
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
                 }
 
                 Spacer(modifier = Modifier.weight(1f))

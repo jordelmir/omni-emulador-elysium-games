@@ -85,6 +85,12 @@ object ElysiumBridge {
     external fun nativeGetFrameTime(): Double
 
     /**
+     * Returns the core's declared target FPS (e.g. 60.0 for NTSC, 50.0 for PAL).
+     * Used for accurate frame pacing in the emulation loop.
+     */
+    external fun nativeGetTargetFps(): Double
+
+    /**
      * Shuts down the emulation engine.
      * Releases the AHardwareBuffer, unloads the game, deinitializes
      * the core, and closes the dynamic library.
@@ -135,6 +141,13 @@ object ElysiumBridge {
      * @param mode 0 for Original, 1 for Scale2x (Omni-Scale Ultra)
      */
     external fun nativeSetUpscaler(mode: Int)
+
+    /**
+     * Renders the current frame to the GL surface using the native shader engine.
+     * @param width  Current viewport width
+     * @param height Current viewport height
+     */
+    external fun nativeRenderFrame(width: Int, height: Int)
 
     var rumbleListener: ((intensity: Int) -> Unit)? = null
 

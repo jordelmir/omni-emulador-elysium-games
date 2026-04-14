@@ -28,9 +28,19 @@ import java.io.File
  */
 class EmulationViewModel(
     private val context: Context,
-    private val hardwareMonitor: HardwareMonitor,
-    private val selectCoreUseCase: SelectCoreUseCase
+    private val hardwareMonitor: com.elysium.console.domain.repository.HardwareMonitor,
+    private val selectCoreUseCase: com.elysium.console.domain.usecase.SelectCoreUseCase,
+    private val settingsManager: com.elysium.console.data.SettingsManager
 ) : ViewModel() {
+
+    fun getActiveShaderName(): String {
+        return when (settingsManager.getVisualEffectId()) {
+            1 -> "RETRO CRT"
+            2 -> "MODERN HD"
+            3 -> "OLED ULTRA"
+            else -> "NONE"
+        }
+    }
 
     private val _telemetry = MutableStateFlow(TelemetryData())
     val telemetry: StateFlow<TelemetryData> = _telemetry.asStateFlow()
@@ -40,6 +50,9 @@ class EmulationViewModel(
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
+
+    private val _activePlatform = MutableStateFlow<com.elysium.console.domain.model.Platform?>(null)
+    val activePlatform: StateFlow<com.elysium.console.domain.model.Platform?> = _activePlatform.asStateFlow()
 
     private val vibrator = context.getSystemService(android.os.Vibrator::class.java)!!
 
@@ -88,6 +101,10 @@ class EmulationViewModel(
 
         // Launch emulation on a background thread
         emulationJob = viewModelScope.launch(Dispatchers.Default) {
+            val extension = romPath.substringAfterLast('.', "")
+            val platform = com.elysium.console.domain.model.Platform.fromExtension(extension)
+            _activePlatform.value = platform
+
             // Pin to prime cores for maximum performance
             ElysiumBridge.nativePinThreads(null)
 
@@ -132,11 +149,27 @@ class EmulationViewModel(
                         ElysiumBridge.nativeLoadState(saveFile.absolutePath)
                     }
                     
+                    // Frame pacing: Calculate target frame time in MS based on Core's native FPS
+                    var targetFps = ElysiumBridge.nativeGetTargetFps()
+                    if (targetFps <= 0.0) targetFps = 60.0
+                    val targetFrameTimeMs = 1000.0 / targetFps
+                    
                     // Enter the emulation loop
+                    var lastFrameTimeMs = System.nanoTime() / 1_000_000.0
                     while (kotlin.coroutines.coroutineContext.isActive && _isRunning.value) {
+                        val startTime = System.nanoTime() / 1_000_000.0
+                        
                         ElysiumBridge.nativeRunFrame()
-                        // Yield to prevent thread starvation
-                        delay(1L)
+                        
+                        val elapsedMs = (System.nanoTime() / 1_000_000.0) - startTime
+                        val sleepTimeMs = (targetFrameTimeMs - elapsedMs).toLong()
+                        
+                        if (sleepTimeMs > 0) {
+                            delay(sleepTimeMs)
+                        } else {
+                            // Yield briefly if we are running behind to avoid starving the UI thread
+                            delay(1L)
+                        }
                     }
                 } else {
                     _isRunning.value = false

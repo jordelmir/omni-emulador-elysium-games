@@ -188,6 +188,10 @@ public:
     bool isInitialized() const { return mInitialized; }
 
     void release() {
+        if (mProgram != 0) {
+            glDeleteProgram(mProgram);
+            mProgram = 0;
+        }
         if (mTextureId != 0) {
             glDeleteTextures(1, &mTextureId);
             mTextureId = 0;
@@ -201,15 +205,170 @@ public:
         HBR_LOGI("HardwareBufferRenderer released");
     }
 
+    /**
+     * Renders the texture to the current framebuffer using the active shader.
+     */
+    void render(int screenWidth, int screenHeight) {
+        if (!mInitialized || mTextureId == 0) return;
+
+        if (mProgram == 0) {
+            mProgram = createProgram(mVertexShader, mFragmentShader);
+            if (mProgram == 0) return;
+        }
+
+        glUseProgram(mProgram);
+        glViewport(0, 0, screenWidth, screenHeight);
+
+        GLint posLoc = glGetAttribLocation(mProgram, "aPosition");
+        GLint texLoc = glGetAttribLocation(mProgram, "aTexCoord");
+        GLint sampLoc = glGetUniformLocation(mProgram, "sTexture");
+        GLint resLoc = glGetUniformLocation(mProgram, "uResolution");
+        GLint effectLoc = glGetUniformLocation(mProgram, "uEffectId");
+
+        glEnableVertexAttribArray(posLoc);
+        glVertexAttribPointer(posLoc, 2, GL_FLOAT, GL_FALSE, 0, mQuadCoords);
+
+        glEnableVertexAttribArray(texLoc);
+        glVertexAttribPointer(texLoc, 2, GL_FLOAT, GL_FALSE, 0, mTexCoords);
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_EXTERNAL_OES, mTextureId);
+        glUniform1i(sampLoc, 0);
+        glUniform2f(resLoc, (float)screenWidth, (float)screenHeight);
+        glUniform1i(effectLoc, mEffectId);
+
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+        glDisableVertexAttribArray(posLoc);
+        glDisableVertexAttribArray(texLoc);
+    }
+
 private:
     AHardwareBuffer* mBuffer;
     EGLImageKHR mEglImage;
     GLuint mTextureId;
+    GLuint mProgram = 0;
     uint32_t mWidth;
     uint32_t mHeight;
     int mEffectId;
     int mUpscaleMode;
     bool mInitialized;
+
+    const char* mVertexShader = R"(
+        attribute vec4 aPosition;
+        attribute vec2 aTexCoord;
+        varying vec2 vTexCoord;
+        void main() {
+            gl_Position = aPosition;
+            vTexCoord = aTexCoord;
+        }
+    )";
+
+    const char* mFragmentShader = R"(
+        #extension GL_OES_EGL_image_external : require
+        precision mediump float;
+        varying vec2 vTexCoord;
+        uniform samplerExternalOES sTexture;
+        uniform vec2 uResolution;
+        uniform int uEffectId;
+
+        void main() {
+            vec2 uv = vTexCoord;
+            
+            if (uEffectId == 1) { // 📺 Vanguard RETRO (CRT)
+                vec2 center = uv - 0.5;
+                float dist = dot(center, center);
+                uv = uv + center * dist * 0.05; // Lens distortion
+                
+                if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
+                    discard;
+                }
+
+                vec4 color = texture2D(sTexture, uv);
+                float scanline = sin(uv.y * uResolution.y * 1.5) * 0.1 + 0.9;
+                color.rgb *= scanline;
+                color.rgb *= (1.0 - dist * 0.5); // Vignette
+                gl_FragColor = color;
+
+            } else if (uEffectId == 2) { // ✨ Vanguard MODERN (Sharp + Bloom)
+                vec4 centerCol = texture2D(sTexture, uv);
+                vec4 leftCol = texture2D(sTexture, uv - vec2(1.0/uResolution.x, 0.0));
+                vec4 rightCol = texture2D(sTexture, uv + vec2(1.0/uResolution.x, 0.0));
+                
+                // Adaptive Sharpening
+                vec4 sharpen = centerCol * 2.0 - (leftCol + rightCol) * 0.5;
+                vec4 finalColor = mix(centerCol, sharpen, 0.4);
+                
+                // Subtle Bloom on bright areas
+                float brightness = dot(finalColor.rgb, vec3(0.2126, 0.7152, 0.0722));
+                if (brightness > 0.8) {
+                    finalColor.rgb += centerCol.rgb * 0.2;
+                }
+                
+                gl_FragColor = finalColor;
+
+            } else if (uEffectId == 3) { // 🌑 Vanguard OLED (Deep Black + Vibrant)
+                vec4 color = texture2D(sTexture, uv);
+                
+                // Enhance saturation and contrast for OLED
+                float gray = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+                color.rgb = mix(vec3(gray), color.rgb, 1.2); // Saturation
+                color.rgb = pow(color.rgb, vec3(1.1));       // Contrast boost
+                
+                // Pure black preservation: drop very low intensities
+                if (length(color.rgb) < 0.05) {
+                    color.rgb = vec3(0.0);
+                }
+                
+                gl_FragColor = color;
+
+            } else {
+                gl_FragColor = texture2D(sTexture, uv);
+            }
+        }
+    )";
+
+    const float mQuadCoords[8] = { -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f, -1.0f };
+    const float mTexCoords[8] = { 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f, 1.0f };
+
+    GLuint createProgram(const char* vertexSource, const char* fragmentSource) {
+        GLuint vertexShader = loadShader(GL_VERTEX_SHADER, vertexSource);
+        if (vertexShader == 0) return 0;
+
+        GLuint fragmentShader = loadShader(GL_FRAGMENT_SHADER, fragmentSource);
+        if (fragmentShader == 0) return 0;
+
+        GLuint program = glCreateProgram();
+        if (program != 0) {
+            glAttachShader(program, vertexShader);
+            glAttachShader(program, fragmentShader);
+            glLinkProgram(program);
+            GLint linkStatus = GL_FALSE;
+            glGetProgramiv(program, GL_LINK_STATUS, &linkStatus);
+            if (linkStatus != GL_TRUE) {
+                HBR_LOGE("Could not link program");
+                glDeleteProgram(program);
+                program = 0;
+            }
+        }
+        return program;
+    }
+
+    GLuint loadShader(GLenum shaderType, const char* source) {
+        GLuint shader = glCreateShader(shaderType);
+        if (shader != 0) {
+            glShaderSource(shader, 1, &source, nullptr);
+            glCompileShader(shader);
+            GLint compiled = 0;
+            glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+            if (!compiled) {
+                HBR_LOGE("Could not compile shader %d", shaderType);
+                glDeleteShader(shader);
+                shader = 0;
+            }
+        }
+        return shader;
+    }
 
     bool createEglImage() {
         auto eglGetNativeClientBufferANDROID =

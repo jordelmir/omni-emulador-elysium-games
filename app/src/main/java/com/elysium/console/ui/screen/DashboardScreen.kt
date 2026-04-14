@@ -95,8 +95,16 @@ fun DashboardScreen(
     val telemetry by viewModel.telemetry.collectAsState()
     val coreActive by viewModel.coreActive.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
+    val accentColor by viewModel.accentColor.collectAsState()
 
     val context = LocalContext.current
+
+    // Animated accent color for smooth transitions
+    val animatedAccentColor by androidx.compose.animation.animateColorAsState(
+        targetValue = accentColor,
+        animationSpec = tween(durationMillis = 1000),
+        label = "atmospheric_bg"
+    )
 
     // Android 11+ Manage All Files Permission Launcher
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -157,7 +165,20 @@ fun DashboardScreen(
     var selectedRomForDetail by remember { mutableStateOf<com.elysium.console.domain.model.RomFile?>(null) }
 
     Scaffold(
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier.fillMaxSize()
+            .drawBehind {
+                // Atmospheric ambient glow
+                drawRect(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            animatedAccentColor.copy(alpha = 0.12f),
+                            Color.Transparent
+                        ),
+                        center = Offset(size.width * 0.5f, size.height * 0.3f),
+                        radius = size.width * 1.5f
+                    )
+                )
+            },
         containerColor = DeepBlack,
         topBar = {
             TopAppBar(
@@ -334,7 +355,10 @@ fun DashboardScreen(
                             RomCard(
                                 rom = rom,
                                 onClick = { onRomClick(rom.path) },
-                                onLongClick = { selectedRomForDetail = rom }
+                                onLongClick = { 
+                                    viewModel.updateAccentColor(context, rom)
+                                    selectedRomForDetail = rom 
+                                }
                             )
                         }
                     }

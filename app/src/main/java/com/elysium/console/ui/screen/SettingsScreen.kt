@@ -183,17 +183,66 @@ fun SettingsScreen(
             }
 
             item {
+                SettingsHeader(title = "VANGUARD SHADER ENGINE", icon = Icons.Default.AutoAwesome)
+            }
+
+            item {
                 val visualEffectId by viewModel.visualEffectId.collectAsState()
-                val isCrt = visualEffectId == 1
-                SettingsToggleItem(
-                    title = "CRT Retro Scanlines",
-                    subtitle = "Apply classic TV scanline filter",
-                    icon = Icons.Default.SettingsBrightness,
-                    checked = isCrt,
-                    onCheckedChange = { checked ->
-                        viewModel.setVisualEffectId(if (checked) 1 else 0)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(SurfaceCard)
+                        .border(1.dp, SurfaceBorder, RoundedCornerShape(16.dp))
+                        .padding(16.dp)
+                ) {
+                    Text(
+                        "Visual Filter Profile",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = NeonGreen
+                    )
+                    Text(
+                        "Select the post-processing profile for the engine",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextTertiary
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf(
+                            0 to "OFF",
+                            1 to "RETRO",
+                            2 to "MODERN",
+                            3 to "OLED"
+                        ).forEach { (id, label) ->
+                            val selected = visualEffectId == id
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(40.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (selected) NeonGreen.copy(alpha = 0.2f) else SurfaceElevated)
+                                    .border(
+                                        1.dp,
+                                        if (selected) NeonGreen else Color.Transparent,
+                                        RoundedCornerShape(8.dp)
+                                    )
+                                    .clickable { viewModel.setVisualEffectId(id) },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    label,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (selected) NeonGreen else TextSecondary,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+                                )
+                            }
+                        }
                     }
-                )
+                }
             }
 
             item {

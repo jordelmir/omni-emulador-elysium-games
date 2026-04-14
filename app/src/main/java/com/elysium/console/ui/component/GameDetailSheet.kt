@@ -112,19 +112,30 @@ fun GameDetailSheet(
 
             // AI Metadata / Trivia Section
             Text(
-                text = "VANGUARD INTELLIGENCE",
+                text = "VANGUARD HISTORICAL DATA",
                 style = MaterialTheme.typography.labelSmall,
                 color = NeonGreen.copy(alpha = 0.7f),
                 letterSpacing = 2.sp,
                 fontWeight = FontWeight.Bold
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                if (rom.year.isNotBlank()) {
+                    MetadataBadge(label = "YEAR", value = rom.year)
+                }
+                if (rom.genre.isNotBlank()) {
+                    MetadataBadge(label = "GENRE", value = rom.genre)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
 
             Text(
-                text = "This classic ${rom.platform.displayName} title was identified by the Elysium scraper. " +
-                        "It features authentic ${rom.platform.abbreviation} architecture compatibility. " +
-                        "Multi-disc grouping is active for this session.",
+                text = if (rom.description.isNotBlank()) rom.description else 
+                    "This classic ${rom.platform.displayName} title was identified by the Elysium scraper. " +
+                        "It features authentic ${rom.platform.abbreviation} architecture compatibility.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = Color.White.copy(alpha = 0.8f),
                 lineHeight = 22.sp
@@ -155,5 +166,24 @@ fun GameDetailSheet(
             
             Spacer(modifier = Modifier.height(16.dp))
         }
+    }
+}
+
+@Composable
+private fun MetadataBadge(label: String, value: String) {
+    Column {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = TextSecondary,
+            fontSize = 9.sp,
+            letterSpacing = 1.sp
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.White,
+            fontWeight = FontWeight.Bold
+        )
     }
 }

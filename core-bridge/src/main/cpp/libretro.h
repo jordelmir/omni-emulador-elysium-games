@@ -49,11 +49,67 @@ extern "C" {
 #define RETRO_DEVICE_ID_JOYPAD_R3      15
 
 // ─── Environment Commands ───────────────────────────────────
-#define RETRO_ENVIRONMENT_SET_PIXEL_FORMAT       10
-#define RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY   9
-#define RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY     31
-#define RETRO_ENVIRONMENT_SET_VARIABLES          16
-#define RETRO_ENVIRONMENT_GET_VARIABLE           15
+#define RETRO_ENVIRONMENT_SET_ROTATION                1
+#define RETRO_ENVIRONMENT_GET_OVERSCAN                2
+#define RETRO_ENVIRONMENT_GET_CAN_DUPE                3
+#define RETRO_ENVIRONMENT_SET_MESSAGE                 6
+#define RETRO_ENVIRONMENT_SHUTDOWN                    7
+#define RETRO_ENVIRONMENT_SET_PERFORMANCE_LEVEL       8
+#define RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY        9
+#define RETRO_ENVIRONMENT_SET_PIXEL_FORMAT           10
+#define RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS      11
+#define RETRO_ENVIRONMENT_SET_KEYBOARD_CALLBACK      12
+#define RETRO_ENVIRONMENT_SET_DISK_CONTROL_INTERFACE 13
+#define RETRO_ENVIRONMENT_SET_HW_RENDER             14
+#define RETRO_ENVIRONMENT_GET_VARIABLE              15
+#define RETRO_ENVIRONMENT_SET_VARIABLES             16
+#define RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE        17
+#define RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME       18
+#define RETRO_ENVIRONMENT_GET_LIBRETRO_PATH         19
+#define RETRO_ENVIRONMENT_SET_FRAME_TIME_CALLBACK   21
+#define RETRO_ENVIRONMENT_SET_AUDIO_CALLBACK        22
+#define RETRO_ENVIRONMENT_GET_RUMBLE_INTERFACE_ENV   23
+#define RETRO_ENVIRONMENT_GET_INPUT_DEVICE_CAPABILITIES 24
+#define RETRO_ENVIRONMENT_GET_LOG_INTERFACE          27
+#define RETRO_ENVIRONMENT_GET_PERF_INTERFACE         28
+#define RETRO_ENVIRONMENT_GET_CORE_ASSETS_DIRECTORY  30
+#define RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY         31
+#define RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO         32
+#define RETRO_ENVIRONMENT_SET_CONTROLLER_INFO        35
+#define RETRO_ENVIRONMENT_SET_MEMORY_MAPS            36
+#define RETRO_ENVIRONMENT_SET_GEOMETRY               37
+#define RETRO_ENVIRONMENT_GET_LANGUAGE               39
+#define RETRO_ENVIRONMENT_SET_SUPPORT_ACHIEVEMENTS   42
+#define RETRO_ENVIRONMENT_SET_SERIALIZATION_QUIRKS   44
+#define RETRO_ENVIRONMENT_GET_INPUT_BITMASKS         52
+
+// ─── Log Levels ─────────────────────────────────────────────
+enum retro_log_level {
+    RETRO_LOG_DEBUG = 0,
+    RETRO_LOG_INFO,
+    RETRO_LOG_WARN,
+    RETRO_LOG_ERROR,
+    RETRO_LOG_DUMMY = INT_MAX
+};
+
+typedef void (*retro_log_printf_t)(enum retro_log_level level, const char *fmt, ...);
+
+struct retro_log_callback {
+    retro_log_printf_t log;
+};
+
+// ─── Input Descriptors ─────────────────────────────────────
+struct retro_input_descriptor {
+    unsigned port;
+    unsigned device;
+    unsigned index;
+    unsigned id;
+    const char *description;
+};
+
+// ─── Language Enum ──────────────────────────────────────────
+#define RETRO_LANGUAGE_ENGLISH              0
+#define RETRO_LANGUAGE_SPANISH              6
 
 // ─── Structures ─────────────────────────────────────────────
 

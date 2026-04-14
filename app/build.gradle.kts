@@ -7,6 +7,7 @@ plugins {
 android {
     namespace = "com.elysium.console"
     compileSdk = 34
+    ndkVersion = "27.1.12297006"
 
     defaultConfig {
         applicationId = "com.elysium.console"
@@ -30,12 +31,12 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
     }
 
     kotlinOptions {
-        jvmTarget = "17"
+        jvmTarget = "21"
         allWarningsAsErrors = true
     }
 
@@ -85,6 +86,9 @@ dependencies {
 
     // Coil (Image Loading)
     implementation("io.coil-kt:coil-compose:2.6.0")
+
+    // Palette (Dynamic Theming)
+    implementation("androidx.palette:palette-ktx:1.0.0")
 
     // Lottie (Cinematic Animations)
     implementation("com.airbnb.android:lottie-compose:6.4.0")
