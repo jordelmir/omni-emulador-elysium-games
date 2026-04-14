@@ -20,17 +20,11 @@ import kotlinx.coroutines.launch
 import com.elysium.console.domain.repository.HardwareMonitor
 import com.elysium.console.domain.model.RomFile
 import com.elysium.console.domain.usecase.SelectCoreUseCase
+import java.io.File
 
 /**
  * ViewModel orchestrating the emulation session lifecycle.
  * Bridges the UI layer with the native JNI bridge and domain use cases.
- *
- * Handles:
- * - Core and ROM loading
- * - Emulation loop execution on a dedicated thread
- * - Telemetry collection via TelemetryAgentUseCase
- * - Thread pinning to prime CPU cores
- * - Graceful shutdown and resource cleanup
  */
 class EmulationViewModel(
     private val context: Context,
@@ -44,6 +38,26 @@ class EmulationViewModel(
     private val _isRunning = MutableStateFlow(false)
     val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
 
+    private val _isLoading = MutableStateFlow(false)
+    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
+
+    private val vibrator = context.getSystemService(android.os.Vibrator::class.java)!!
+
+    init {
+        // Haptic Core: Synchronize native rumble with Android hardware
+        ElysiumBridge.rumbleListener = { intensity ->
+            if (intensity > 0) {
+                val amplitude = (intensity / 256).coerceIn(1, 255)
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                    vibrator.vibrate(android.os.VibrationEffect.createOneShot(16, amplitude))
+                } else {
+                    @Suppress("DEPRECATION")
+                    vibrator.vibrate(16)
+                }
+            }
+        }
+    }
+
     private var emulationJob: Job? = null
     private var romFileDescriptor: ParcelFileDescriptor? = null
 
@@ -56,17 +70,11 @@ class EmulationViewModel(
         }
     )
 
-    /**
-     * Starts an emulation session for the given ROM.
-     * This initializes the bridge, loads the first available core,
-     * pins the emulation thread to prime cores, and enters the run loop.
-     *
-     * @param romPath Absolute path to the ROM file
-     */
     fun startEmulation(romPath: String) {
         if (_isRunning.value) return
 
         _isRunning.value = true
+        _isLoading.value = true
 
         // Start telemetry monitoring
         telemetryAgent.start(viewModelScope)
@@ -91,71 +99,63 @@ class EmulationViewModel(
             val core = selectCoreUseCase(dummyRom)
             val coreName = core?.libraryPath ?: "snes9x_libretro_android.so" // Default fallback
             
-            // Construct full path to the bundled core (assuming they are in the native library path)
-            // Wait, we need the app to pass the path to the extracted core. By default, JNI libraries 
-            // from src/main/jniLibs are unpacked to the app's nativeLibraryDir. We can just pass the name
-            // if we use a helper, but nativeLoadCore expects an absolute path.
-            // Let's assume MainActivity copies / extracts them, or we pass the nativeLibraryDir.
-            // Actually, we can get the nativeLibraryDir from the Application context!
-            // But for now, we'll assume they're in the default lib dir. Wait, nativeLoadCore uses dlopen.
-            // We can pass just the name to dlopen, and the dynamic linker will find it in the app's lib directory!
             val loadedCore = ElysiumBridge.nativeLoadCore(coreName)
             if (!loadedCore) {
                 _isRunning.value = false
+                _isLoading.value = false
                 return@launch
             }
 
-            loadRom(romPath)
+            loadRomInternal(romPath)
         }
     }
 
-    fun loadRom(path: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            _isLoading.value = true
-            try {
-                // Find the ROM in our library to check for multi-disc status
-                // (In a real app, we'd pass the RomFile object or use a repository lookup)
-                
-                var actualPath = path
-                // Multi-disc support: Generate .m3u for grouped discs
-                if (path.contains("content://") && path.endsWith(".m3u")) {
-                    // Logic to handle virtual m3u if needed
-                }
-
-                val uri = Uri.parse(path)
-                val pfd: ParcelFileDescriptor? = context.contentResolver.openFileDescriptor(uri, "r")
-                
-                if (pfd != null) {
-                    val fd = pfd.detachFd()
-                    val success = ElysiumBridge.nativeLoadRom(path, fd)
-                    if (success) {
-                        _isRunning.value = true
-                        
-                        // QUICKSTATE: Attempt to auto-load the last session
-                        val saveFile = File(context.filesDir, "saves/auto_${generateSafeName(path)}.state")
-                        if (saveFile.exists()) {
-                            ElysiumBridge.nativeLoadState(saveFile.absolutePath)
-                        }
-                        
-                        // Enter the emulation loop
-                        while (isActive && _isRunning.value) {
-                            ElysiumBridge.nativeRunFrame()
-                            delay(1L)
-                        }
+    private suspend fun loadRomInternal(path: String) {
+        _isLoading.value = true
+        try {
+            val uri = Uri.parse(path)
+            val pfd: ParcelFileDescriptor? = context.contentResolver.openFileDescriptor(uri, "r")
+            
+            if (pfd != null) {
+                romFileDescriptor = pfd
+                val fd = pfd.detachFd()
+                val success = ElysiumBridge.nativeLoadRom(path, fd)
+                if (success) {
+                    _isLoading.value = false
+                    _isRunning.value = true
+                    
+                    // QUICKSTATE: Attempt to auto-load the last session
+                    val saveDir = File(context.filesDir, "saves")
+                    if (!saveDir.exists()) saveDir.mkdirs()
+                    val saveFile = File(saveDir, "auto_${generateSafeName(path)}.state")
+                    if (saveFile.exists()) {
+                        ElysiumBridge.nativeLoadState(saveFile.absolutePath)
                     }
-
-                // Yield to prevent thread starvation
-                // The actual frame pacing is handled by the core's vsync
-                delay(1L)
+                    
+                    // Enter the emulation loop
+                    while (kotlin.coroutines.coroutineContext.isActive && _isRunning.value) {
+                        ElysiumBridge.nativeRunFrame()
+                        // Yield to prevent thread starvation
+                        delay(1L)
+                    }
+                } else {
+                    _isRunning.value = false
+                    _isLoading.value = false
+                }
             }
+        } catch (e: Exception) {
+            _isRunning.value = false
+            _isLoading.value = false
         }
     }
 
-    /**
-     * Stops the emulation session and cleans up all resources.
-     */
+    private fun generateSafeName(path: String): String {
+        return path.replace(Regex("[^a-zA-Z0-9]"), "_")
+    }
+
     fun stopEmulation() {
         _isRunning.value = false
+        _isLoading.value = false
         telemetryAgent.stop()
         emulationJob?.cancel()
         emulationJob = null

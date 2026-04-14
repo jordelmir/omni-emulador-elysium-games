@@ -17,6 +17,8 @@ class SettingsManager(context: Context) {
         private const val KEY_BIOS_PATH = "bios_path"
         private const val KEY_SWITCH_KEYS = "switch_keys"
         private const val KEY_DRIVER_PATH = "gpu_driver_path"
+        private const val KEY_VISUAL_EFFECT_ID = "visual_effect_id"
+        private const val KEY_UPSCALE_MODE = "upscale_mode"
     }
 
     /**
@@ -69,5 +71,11 @@ class SettingsManager(context: Context) {
 
     fun setVisualEffectId(id: Int) {
         prefs.edit().putInt(KEY_VISUAL_EFFECT_ID, id).apply()
+    }
+
+    fun getUpscaleMode(): Int = prefs.getInt(KEY_UPSCALE_MODE, 0)
+
+    fun setUpscaleMode(mode: Int) {
+        prefs.edit().putInt(KEY_UPSCALE_MODE, mode).apply()
     }
 }

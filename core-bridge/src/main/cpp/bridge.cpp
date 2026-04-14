@@ -1,12 +1,6 @@
 // ═══════════════════════════════════════════════════════════════
 // Elysium Console — JNI Bridge (bridge.cpp)
 // ═══════════════════════════════════════════════════════════════
-// Central native bridge implementing:
-// 1. Libretro core lifecycle (dlopen/dlsym)
-// 2. Thread pinning to prime cores (sched_setaffinity)
-// 3. Zero-copy AHardwareBuffer rendering pipeline
-// 4. Dynamic cycle multiplier for telemetry-driven adjustments
-// ═══════════════════════════════════════════════════════════════
 
 #include <jni.h>
 #include <android/log.h>
@@ -17,6 +11,7 @@
 #include <time.h>
 #include <atomic>
 #include <mutex>
+#include <type_traits>
 
 #include "libretro.h"
 #include "thread_utils.h"
@@ -27,18 +22,22 @@
 #define TAG "ElysiumBridge"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
-#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
+
+// Forward declarations for Haptic Core (Libretro Rumble)
+#define RETRO_ENVIRONMENT_GET_RUMBLE_INTERFACE 38
+enum retro_rumble_effect { RETRO_RUMBLE_STRONG = 0, RETRO_RUMBLE_WEAK = 1, RETRO_RUMBLE_DUMMY = 0x7fffffff };
+struct retro_rumble_interface { bool (*set_rumble_state)(unsigned port, enum retro_rumble_effect effect, uint16_t strength); };
+
+extern "C" {
+bool core_set_rumble_state(unsigned port, enum retro_rumble_effect effect, uint16_t strength);
+}
 
 // ═══════════════════════════════════════════════════════════════
 // Global State
 // ═══════════════════════════════════════════════════════════════
 
 namespace {
-
-// Libretro core handle
 void* g_coreHandle = nullptr;
-
-// Libretro core function pointers
 retro_init_t                  g_retro_init = nullptr;
 retro_deinit_t                g_retro_deinit = nullptr;
 retro_api_version_t           g_retro_api_version = nullptr;
@@ -58,36 +57,25 @@ retro_serialize_size_t        g_retro_serialize_size = nullptr;
 retro_serialize_t             g_retro_serialize = nullptr;
 retro_unserialize_t           g_retro_unserialize = nullptr;
 
-// Zero-copy renderer
+jmethodID g_onRumbleMethod = nullptr;
+jobject g_bridgeObject = nullptr;
+JavaVM* g_jvm = nullptr;
+
 elysium::HardwareBufferRenderer g_renderer;
-
-// Audio engine (OpenSL ES)
 elysium::AudioEngine g_audioEngine;
-
-// Input manager
 elysium::InputManager g_inputManager;
 
-// Telemetry state
 std::atomic<float> g_cycleMultiplier{1.0f};
 std::atomic<double> g_currentFps{0.0};
 std::atomic<double> g_frameTimeMs{0.0};
-std::mutex g_frameMutex;
-
-// Frame timing
 struct timespec g_lastFrameTime = {0, 0};
-uint64_t g_frameCount = 0;
 double g_fpsAccumulator = 0.0;
 int g_fpsSampleCount = 0;
 
-// Current AV info
-retro_system_av_info g_avInfo = {};
 unsigned g_pixelFormat = RETRO_PIXEL_FORMAT_RGB565;
-
-// System paths
-char g_systemDir[512] = "/data/data/com.elysium.console/files/system";
-char g_saveDir[512] = "/data/data/com.elysium.console/files/saves";
-
-} // anonymous namespace
+char g_systemDir[512] = "";
+char g_saveDir[512] = "";
+}
 
 // ═══════════════════════════════════════════════════════════════
 // Libretro Callbacks
@@ -96,9 +84,7 @@ char g_saveDir[512] = "/data/data/com.elysium.console/files/saves";
 static bool elysium_environment(unsigned cmd, void* data) {
     switch (cmd) {
         case RETRO_ENVIRONMENT_SET_PIXEL_FORMAT: {
-            const unsigned* fmt = static_cast<const unsigned*>(data);
-            g_pixelFormat = *fmt;
-            LOGI("Pixel format set to: %u", g_pixelFormat);
+            g_pixelFormat = *static_cast<const unsigned*>(data);
             return true;
         }
         case RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY: {
@@ -109,99 +95,48 @@ static bool elysium_environment(unsigned cmd, void* data) {
             *static_cast<const char**>(data) = g_saveDir;
             return true;
         }
-        case RETRO_ENVIRONMENT_GET_VARIABLE: {
-            auto* var = static_cast<retro_variable*>(data);
-            var->value = nullptr;
-            return false;
+        case RETRO_ENVIRONMENT_GET_RUMBLE_INTERFACE: {
+            auto* interface = (struct retro_rumble_interface*)data;
+            interface->set_rumble_state = core_set_rumble_state;
+            return true;
         }
-        default:
-            return false;
+        default: return false;
     }
 }
 
-static void elysium_video_refresh(const void* data, unsigned width,
-                                   unsigned height, size_t pitch) {
-    if (!data) {
-        return; // Duplicate frame, skip
+static void elysium_video_refresh(const void* data, unsigned width, unsigned height, size_t pitch) {
+    if (data && g_renderer.isInitialized()) {
+        g_renderer.updateFrame(data, width, height, pitch);
     }
 
-    // Update the hardware buffer with the frame data (zero-copy path)
-    if (g_renderer.isInitialized()) {
-        // Convert from core pixel format to RGBA8888 if needed
-        // For XRGB8888, the buffer can be passed directly
-        if (g_pixelFormat == RETRO_PIXEL_FORMAT_XRGB8888) {
-            g_renderer.updateFrame(data, width, height, pitch);
-        } else {
-            // For RGB565, we need a conversion buffer
-            // This path is less optimal but handles older cores
-            g_renderer.updateFrame(data, width, height, pitch);
-        }
-    }
-
-    // Update frame timing telemetry
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
-
     if (g_lastFrameTime.tv_sec != 0) {
-        double deltaMs = (now.tv_sec - g_lastFrameTime.tv_sec) * 1000.0
-                        + (now.tv_nsec - g_lastFrameTime.tv_nsec) / 1000000.0;
-
+        double deltaMs = (now.tv_sec - g_lastFrameTime.tv_sec) * 1000.0 + (now.tv_nsec - g_lastFrameTime.tv_nsec) / 1000000.0;
         g_frameTimeMs.store(deltaMs, std::memory_order_relaxed);
-
         if (deltaMs > 0.0) {
-            double instantFps = 1000.0 / deltaMs;
-            g_fpsAccumulator += instantFps;
-            g_fpsSampleCount++;
-
-            // Rolling average over 30 samples
-            if (g_fpsSampleCount >= 30) {
-                g_currentFps.store(g_fpsAccumulator / g_fpsSampleCount,
-                                   std::memory_order_relaxed);
-                g_fpsAccumulator = 0.0;
-                g_fpsSampleCount = 0;
+            g_fpsAccumulator += (1000.0 / deltaMs);
+            if (++g_fpsSampleCount >= 30) {
+                g_currentFps.store(g_fpsAccumulator / 30.0, std::memory_order_relaxed);
+                g_fpsAccumulator = 0.0; g_fpsSampleCount = 0;
             }
         }
     }
-
     g_lastFrameTime = now;
-    g_frameCount++;
 }
 
 static void elysium_audio_sample(int16_t left, int16_t right) {
-    if (g_audioEngine.isInitialized()) {
-        g_audioEngine.queueSample(left, right);
-    }
+    if (g_audioEngine.isInitialized()) g_audioEngine.queueSample(left, right);
 }
 
 static size_t elysium_audio_sample_batch(const int16_t* data, size_t frames) {
-    if (g_audioEngine.isInitialized()) {
-        return g_audioEngine.queueSamples(data, frames);
-    }
-    return frames;
+    return g_audioEngine.isInitialized() ? g_audioEngine.queueSamples(data, frames) : frames;
 }
 
-static void elysium_input_poll() {
-    // Input polling — the InputManager maintains state atomically,
-    // so no work needed here. State is read in input_state.
-}
+static void elysium_input_poll() {}
 
-static int16_t elysium_input_state(unsigned port, unsigned device,
-                                    unsigned index, unsigned id) {
+static int16_t elysium_input_state(unsigned port, unsigned device, unsigned index, unsigned id) {
     return g_inputManager.getInputState(port, device, index, id);
-}
-
-// ═══════════════════════════════════════════════════════════════
-// Helper: Load a symbol from the core library
-// ═══════════════════════════════════════════════════════════════
-
-template<typename T>
-static bool loadSymbol(T& out, const char* name) {
-    out = reinterpret_cast<T>(dlsym(g_coreHandle, name));
-    if (!out) {
-        LOGE("Failed to load symbol: %s — %s", name, dlerror());
-        return false;
-    }
-    return true;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -211,383 +146,174 @@ static bool loadSymbol(T& out, const char* name) {
 extern "C" {
 
 JNIEXPORT void JNICALL
-Java_com_elysium_console_bridge_ElysiumBridge_nativeInit(
-    JNIEnv* env, jobject thiz,
-    jstring systemPath, jstring savePath
-) {
-    // Store system paths
+Java_com_elysium_console_bridge_ElysiumBridge_nativeInit(JNIEnv* env, jobject thiz, jstring systemPath, jstring savePath) {
     const char* sys = env->GetStringUTFChars(systemPath, nullptr);
     const char* sav = env->GetStringUTFChars(savePath, nullptr);
     strncpy(g_systemDir, sys, sizeof(g_systemDir) - 1);
     strncpy(g_saveDir, sav, sizeof(g_saveDir) - 1);
     env->ReleaseStringUTFChars(systemPath, sys);
     env->ReleaseStringUTFChars(savePath, sav);
-
-    // Reset telemetry
-    g_currentFps.store(0.0);
-    g_frameTimeMs.store(0.0);
-    g_frameCount = 0;
-    g_fpsAccumulator = 0.0;
-    g_fpsSampleCount = 0;
-    g_lastFrameTime = {0, 0};
-    g_cycleMultiplier.store(1.0f);
-    g_inputManager.reset();
-
-    LOGI("Elysium Bridge initialized. System: %s | Save: %s", g_systemDir, g_saveDir);
+    if (g_bridgeObject) env->DeleteGlobalRef(g_bridgeObject);
+    g_bridgeObject = env->NewGlobalRef(thiz);
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_elysium_console_bridge_ElysiumBridge_nativeLoadCore(
-    JNIEnv* env, jobject thiz, jstring corePath
-) {
-    // Unload previous core if loaded
-    if (g_coreHandle) {
-        if (g_retro_deinit) g_retro_deinit();
-        dlclose(g_coreHandle);
-        g_coreHandle = nullptr;
-    }
-
+Java_com_elysium_console_bridge_ElysiumBridge_nativeLoadCore(JNIEnv* env, jobject thiz, jstring corePath) {
+    if (g_coreHandle) dlclose(g_coreHandle);
     const char* path = env->GetStringUTFChars(corePath, nullptr);
-    LOGI("Loading core: %s", path);
-
     g_coreHandle = dlopen(path, RTLD_LAZY);
-    if (!g_coreHandle) {
-        LOGE("dlopen failed: %s", dlerror());
-        env->ReleaseStringUTFChars(corePath, path);
-        return JNI_FALSE;
-    }
     env->ReleaseStringUTFChars(corePath, path);
+    if (!g_coreHandle) return JNI_FALSE;
 
-    // Resolve all Libretro symbols
     bool ok = true;
-    ok &= loadSymbol(g_retro_init, "retro_init");
-    ok &= loadSymbol(g_retro_deinit, "retro_deinit");
-    ok &= loadSymbol(g_retro_api_version, "retro_api_version");
-    ok &= loadSymbol(g_retro_get_system_info, "retro_get_system_info");
-    ok &= loadSymbol(g_retro_get_system_av_info, "retro_get_system_av_info");
-    ok &= loadSymbol(g_retro_set_environment, "retro_set_environment");
-    ok &= loadSymbol(g_retro_set_video_refresh, "retro_set_video_refresh");
-    ok &= loadSymbol(g_retro_set_audio_sample, "retro_set_audio_sample");
-    ok &= loadSymbol(g_retro_set_audio_sample_batch, "retro_set_audio_sample_batch");
-    ok &= loadSymbol(g_retro_set_input_poll, "retro_set_input_poll");
-    ok &= loadSymbol(g_retro_set_input_state, "retro_set_input_state");
-    ok &= loadSymbol(g_retro_load_game, "retro_load_game");
-    ok &= loadSymbol(g_retro_unload_game, "retro_unload_game");
-    g_retro_run = (retro_run_t)dlsym(g_coreHandle, "retro_run");
-    g_retro_reset = (retro_reset_t)dlsym(g_coreHandle, "retro_reset");
-    g_retro_serialize_size = (retro_serialize_size_t)dlsym(g_coreHandle, "retro_serialize_size");
-    g_retro_serialize = (retro_serialize_t)dlsym(g_coreHandle, "retro_serialize");
-    g_retro_unserialize = (retro_unserialize_t)dlsym(g_coreHandle, "retro_unserialize");
+    auto load = [&](auto& ptr, const char* name) {
+        ptr = reinterpret_cast<std::remove_reference_t<decltype(ptr)>>(dlsym(g_coreHandle, name));
+        if (!ptr) ok = false;
+    };
 
-    if (!g_retro_init || !g_retro_load_game || !g_retro_run) {
-        LOGE("Failed to resolve all Libretro symbols");
-        dlclose(g_coreHandle);
-        g_coreHandle = nullptr;
-        return JNI_FALSE;
-    }
+    load(g_retro_init, "retro_init");
+    load(g_retro_deinit, "retro_deinit");
+    load(g_retro_api_version, "retro_api_version");
+    load(g_retro_get_system_info, "retro_get_system_info");
+    load(g_retro_get_system_av_info, "retro_get_system_av_info");
+    load(g_retro_set_environment, "retro_set_environment");
+    load(g_retro_set_video_refresh, "retro_set_video_refresh");
+    load(g_retro_set_audio_sample, "retro_set_audio_sample");
+    load(g_retro_set_audio_sample_batch, "retro_set_audio_sample_batch");
+    load(g_retro_set_input_poll, "retro_set_input_poll");
+    load(g_retro_set_input_state, "retro_set_input_state");
+    load(g_retro_load_game, "retro_load_game");
+    load(g_retro_unload_game, "retro_unload_game");
+    load(g_retro_run, "retro_run");
+    load(g_retro_reset, "retro_reset");
+    load(g_retro_serialize_size, "retro_serialize_size");
+    load(g_retro_serialize, "retro_serialize");
+    load(g_retro_unserialize, "retro_unserialize");
 
-    // Set callbacks
+    if (!ok) return JNI_FALSE;
+
     g_retro_set_environment(elysium_environment);
     g_retro_set_video_refresh(elysium_video_refresh);
     g_retro_set_audio_sample(elysium_audio_sample);
     g_retro_set_audio_sample_batch(elysium_audio_sample_batch);
     g_retro_set_input_poll(elysium_input_poll);
     g_retro_set_input_state(elysium_input_state);
-
-    // Initialize the core
     g_retro_init();
-
-    // Log core info
-    retro_system_info sysInfo = {};
-    g_retro_get_system_info(&sysInfo);
-    LOGI("Core loaded: %s v%s (extensions: %s)",
-         sysInfo.library_name, sysInfo.library_version,
-         sysInfo.valid_extensions);
 
     return JNI_TRUE;
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_elysium_console_bridge_ElysiumBridge_nativeLoadRom(
-    JNIEnv* env, jobject thiz, jstring romPath, jint fd
-) {
-    if (!g_coreHandle || !g_retro_load_game) {
-        LOGE("No core loaded");
-        return JNI_FALSE;
-    }
-
+Java_com_elysium_console_bridge_ElysiumBridge_nativeLoadRom(JNIEnv* env, jobject thiz, jstring romPath, jint fd) {
     char finalPath[1024];
-    if (fd >= 0) {
-        // Use the /proc/self/fd trick to bridge SAF descriptors to native fopen
-        sprintf(finalPath, "/proc/self/fd/%d", fd);
-        LOGI("Loading ROM via File Descriptor: %s", finalPath);
-    } else {
+    if (fd >= 0) sprintf(finalPath, "/proc/self/fd/%d", fd);
+    else {
         const char* path = env->GetStringUTFChars(romPath, nullptr);
         strncpy(finalPath, path, sizeof(finalPath) - 1);
         env->ReleaseStringUTFChars(romPath, path);
-        LOGI("Loading ROM via path: %s", finalPath);
     }
 
-    retro_game_info gameInfo = {};
-    gameInfo.path = finalPath;
-    gameInfo.data = nullptr;
-    gameInfo.size = 0;
-    gameInfo.meta = nullptr;
+    retro_game_info gameInfo = { finalPath, nullptr, 0, nullptr };
+    if (!g_retro_load_game(&gameInfo)) return JNI_FALSE;
 
-    bool loaded = g_retro_load_game(&gameInfo);
-
-    if (!loaded) {
-        LOGE("retro_load_game failed for path: %s", finalPath);
-        return JNI_FALSE;
-    }
-
-    // Get AV info and initialize the renderer
-    g_retro_get_system_av_info(&g_avInfo);
-    LOGI("AV Info: %ux%u @ %.2f fps, audio: %.0f Hz",
-         g_avInfo.geometry.base_width, g_avInfo.geometry.base_height,
-         g_avInfo.timing.fps, g_avInfo.timing.sample_rate);
-
-    // Initialize the zero-copy hardware buffer renderer
-    if (!g_renderer.initialize(g_avInfo.geometry.max_width,
-                                g_avInfo.geometry.max_height)) {
-        LOGW("HardwareBuffer init failed, falling back to standard rendering");
-    }
-
-    // Initialize audio engine with the core's sample rate
-    if (!g_audioEngine.initialize(
-            static_cast<int>(g_avInfo.timing.sample_rate))) {
-        LOGW("Audio engine init failed, continuing without audio");
-    }
-
-    // Reset frame timing
-    g_lastFrameTime = {0, 0};
-    g_frameCount = 0;
-    g_currentFps.store(g_avInfo.timing.fps);
+    retro_system_av_info av;
+    g_retro_get_system_av_info(&av);
+    g_renderer.initialize(av.geometry.max_width, av.geometry.max_height);
+    g_audioEngine.initialize(static_cast<int>(av.timing.sample_rate));
 
     return JNI_TRUE;
 }
 
 JNIEXPORT void JNICALL
-Java_com_elysium_console_bridge_ElysiumBridge_nativeRunFrame(
-    JNIEnv* env, jobject thiz
-) {
-    if (!g_retro_run) {
-        return;
-    }
-
-    // Apply cycle multiplier (for telemetry-driven performance adjustment)
-    float multiplier = g_cycleMultiplier.load(std::memory_order_relaxed);
-    int framesToRun = static_cast<int>(multiplier);
-    if (framesToRun < 1) framesToRun = 1;
-
-    for (int i = 0; i < framesToRun; ++i) {
-        g_retro_run();
-    }
+Java_com_elysium_console_bridge_ElysiumBridge_nativeRunFrame(JNIEnv* env, jobject thiz) {
+    if (!g_retro_run) return;
+    int count = static_cast<int>(g_cycleMultiplier.load(std::memory_order_relaxed));
+    if (count < 1) count = 1;
+    for (int i = 0; i < count; ++i) g_retro_run();
 }
 
-JNIEXPORT jboolean JNICALL
-Java_com_elysium_console_bridge_ElysiumBridge_nativePinThreads(
-    JNIEnv* env, jobject thiz, jintArray coreIds
-) {
-    if (!coreIds) {
-        // Auto-detect prime cores
-        return elysium::pinToPrimeCores() ? JNI_TRUE : JNI_FALSE;
-    }
-
-    jint* ids = env->GetIntArrayElements(coreIds, nullptr);
-    jsize len = env->GetArrayLength(coreIds);
-
-    bool result = elysium::pinThreadToCores(ids, static_cast<int>(len));
-
-    env->ReleaseIntArrayElements(coreIds, ids, JNI_ABORT);
-    return result ? JNI_TRUE : JNI_FALSE;
+JNIEXPORT void JNICALL Java_com_elysium_console_bridge_ElysiumBridge_nativeSetCycleMultiplier(JNIEnv* env, jobject thiz, jfloat m) {
+    g_cycleMultiplier.store(m, std::memory_order_relaxed);
 }
 
-JNIEXPORT void JNICALL
-Java_com_elysium_console_bridge_ElysiumBridge_nativeSetCycleMultiplier(
-    JNIEnv* env, jobject thiz, jfloat multiplier
-) {
-    float clamped = multiplier;
-    if (clamped < 0.25f) clamped = 0.25f;
-    if (clamped > 4.0f) clamped = 4.0f;
-    g_cycleMultiplier.store(clamped, std::memory_order_relaxed);
-    LOGI("Cycle multiplier set to: %.2f", clamped);
-}
-
-JNIEXPORT jdouble JNICALL
-Java_com_elysium_console_bridge_ElysiumBridge_nativeGetFps(
-    JNIEnv* env, jobject thiz
-) {
+JNIEXPORT jdouble JNICALL Java_com_elysium_console_bridge_ElysiumBridge_nativeGetFps(JNIEnv* env, jobject thiz) {
     return g_currentFps.load(std::memory_order_relaxed);
 }
 
-JNIEXPORT jdouble JNICALL
-Java_com_elysium_console_bridge_ElysiumBridge_nativeGetFrameTime(
-    JNIEnv* env, jobject thiz
-) {
+JNIEXPORT jdouble JNICALL Java_com_elysium_console_bridge_ElysiumBridge_nativeGetFrameTime(JNIEnv* env, jobject thiz) {
     return g_frameTimeMs.load(std::memory_order_relaxed);
 }
 
+JNIEXPORT jboolean JNICALL Java_com_elysium_console_bridge_ElysiumBridge_nativeSaveState(JNIEnv* env, jobject thiz, jstring path) {
+    if (!g_retro_serialize || !g_retro_serialize_size) return JNI_FALSE;
+    size_t size = g_retro_serialize_size();
+    void* buf = malloc(size);
+    if (!buf) return JNI_FALSE;
+    bool ok = g_retro_serialize(buf, size);
+    if (ok) {
+        const char* p = env->GetStringUTFChars(path, nullptr);
+        FILE* f = fopen(p, "wb");
+        if (f) { fwrite(buf, 1, size, f); fclose(f); }
+        env->ReleaseStringUTFChars(path, p);
+    }
+    free(buf);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL Java_com_elysium_console_bridge_ElysiumBridge_nativeLoadState(JNIEnv* env, jobject thiz, jstring path) {
+    if (!g_retro_unserialize) return JNI_FALSE;
+    const char* p = env->GetStringUTFChars(path, nullptr);
+    FILE* f = fopen(p, "rb");
+    if (!f) { env->ReleaseStringUTFChars(path, p); return JNI_FALSE; }
+    fseek(f, 0, SEEK_END); size_t size = ftell(f); fseek(f, 0, SEEK_SET);
+    void* buf = malloc(size); fread(buf, 1, size, f); fclose(f);
+    bool ok = g_retro_unserialize(buf, size);
+    free(buf); env->ReleaseStringUTFChars(path, p);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL Java_com_elysium_console_bridge_ElysiumBridge_nativeReset(JNIEnv* env, jobject thiz) {
+    if (g_retro_reset) g_retro_reset();
+}
+
 JNIEXPORT void JNICALL
-Java_com_elysium_console_bridge_ElysiumBridge_nativeShutdown(
-    JNIEnv* env, jobject thiz
-) {
-    LOGI("Shutting down Elysium Bridge...");
+Java_com_elysium_console_bridge_ElysiumBridge_nativeSetVisualEffect(JNIEnv* env, jobject thiz, jint effectId) {
+    g_renderer.setVisualEffect(effectId);
+}
 
-    // Shutdown audio engine
-    g_audioEngine.shutdown();
+JNIEXPORT void JNICALL
+Java_com_elysium_console_bridge_ElysiumBridge_nativeSetUpscaler(JNIEnv* env, jobject thiz, jint mode) {
+    g_renderer.setUpscaleMode(mode);
+}
 
-    // Reset input
-    g_inputManager.reset();
-
-    // Release renderer
-    g_renderer.release();
-
-    // Unload game and deinit core
+JNIEXPORT void JNICALL
+Java_com_elysium_console_bridge_ElysiumBridge_nativeShutdown(JNIEnv* env, jobject thiz) {
     if (g_retro_unload_game) g_retro_unload_game();
     if (g_retro_deinit) g_retro_deinit();
-
-    // Close the dynamic library
-    if (g_coreHandle) {
-        dlclose(g_coreHandle);
-        g_coreHandle = nullptr;
-    }
-
-    // Clear function pointers
-    g_retro_init = nullptr;
-    g_retro_deinit = nullptr;
-    g_retro_api_version = nullptr;
-    g_retro_get_system_info = nullptr;
-    g_retro_get_system_av_info = nullptr;
-    g_retro_set_environment = nullptr;
-    g_retro_set_video_refresh = nullptr;
-    g_retro_set_audio_sample = nullptr;
-    g_retro_set_audio_sample_batch = nullptr;
-    g_retro_set_input_poll = nullptr;
-    g_retro_set_input_state = nullptr;
-    g_retro_load_game = nullptr;
-    g_retro_unload_game = nullptr;
-    g_retro_run = nullptr;
-    g_retro_reset = nullptr;
-
-    LOGI("Elysium Bridge shutdown complete");
+    if (g_coreHandle) { dlclose(g_coreHandle); g_coreHandle = nullptr; }
+    g_renderer.release();
 }
 
-// ═══════════════════════════════════════════════════════════════
-// Input JNI — Key Event Routing
-// ═══════════════════════════════════════════════════════════════
-
-JNIEXPORT jboolean JNICALL
-Java_com_elysium_console_bridge_ElysiumBridge_nativeKeyEvent(
-    JNIEnv* env, jobject thiz,
-    jint keycode, jboolean pressed
-) {
-    return g_inputManager.handleKeyEvent(keycode, pressed == JNI_TRUE)
-           ? JNI_TRUE : JNI_FALSE;
+bool core_set_rumble_state(unsigned port, enum retro_rumble_effect effect, uint16_t strength) {
+    if (!g_jvm || !g_bridgeObject || !g_onRumbleMethod) return false;
+    JNIEnv* env;
+    bool detach = false;
+    if (g_jvm->GetEnv((void**)&env, JNI_VERSION_1_6) == JNI_EDETACHED) {
+        if (g_jvm->AttachCurrentThread(&env, nullptr) != JNI_OK) return false;
+        detach = true;
+    }
+    if (env) env->CallVoidMethod(g_bridgeObject, g_onRumbleMethod, (jint)strength);
+    if (detach) g_jvm->DetachCurrentThread();
+    return true;
 }
 
-JNIEXPORT void JNICALL
-Java_com_elysium_console_bridge_ElysiumBridge_nativeSetButton(
-    JNIEnv* env, jobject thiz,
-    jint retroId, jboolean pressed
-) {
-    g_inputManager.setButton(static_cast<unsigned>(retroId), pressed == JNI_TRUE);
-}
-
-JNIEXPORT void JNICALL
-Java_com_elysium_console_bridge_ElysiumBridge_nativeSetGpuDriver(
-    JNIEnv* env, jobject thiz, jstring driverPath
-) {
-    if (driverPath == nullptr) {
-        unsetenv("VK_ICD_FILENAMES");
-        LOGI("GPU Driver reset to system default");
-        return;
-    }
-
-    const char* path = env->GetStringUTFChars(driverPath, nullptr);
-    if (path && strlen(path) > 0) {
-        // Redirect Vulkan loader to the custom ICD (Turnip/Mesa)
-        setenv("VK_ICD_FILENAMES", path, 1);
-        LOGI("Custom GPU Driver set: %s", path);
-    } else {
-        unsetenv("VK_ICD_FILENAMES");
-        LOGI("GPU Driver reset to system default (empty path)");
-    }
-    env->ReleaseStringUTFChars(driverPath, path);
-}
-
-JNIEXPORT jboolean JNICALL
-Java_com_elysium_console_bridge_ElysiumBridge_nativeSaveState(
-    JNIEnv* env, jobject thiz, jstring path
-) {
-    if (!g_coreHandle || !g_retro_serialize || !g_retro_serialize_size) return JNI_FALSE;
-
-    size_t size = g_retro_serialize_size();
-    if (size == 0) return JNI_FALSE;
-
-    void* buffer = malloc(size);
-    if (!buffer) return JNI_FALSE;
-
-    bool success = g_retro_serialize(buffer, size);
-    if (success) {
-        const char* nativePath = env->GetStringUTFChars(path, nullptr);
-        FILE* f = fopen(nativePath, "wb");
-        if (f) {
-            fwrite(buffer, 1, size, f);
-            fclose(f);
-            LOGI("State saved to: %s (%zu bytes)", nativePath, size);
-        } else {
-            success = false;
-        }
-        env->ReleaseStringUTFChars(path, nativePath);
-    }
-
-    free(buffer);
-    return success ? JNI_TRUE : JNI_FALSE;
-}
-
-JNIEXPORT jboolean JNICALL
-Java_com_elysium_console_bridge_ElysiumBridge_nativeLoadState(
-    JNIEnv* env, jobject thiz, jstring path
-) {
-    if (!g_coreHandle || !g_retro_unserialize) return JNI_FALSE;
-
-    const char* nativePath = env->GetStringUTFChars(path, nullptr);
-    FILE* f = fopen(nativePath, "rb");
-    if (!f) {
-        env->ReleaseStringUTFChars(path, nativePath);
-        return JNI_FALSE;
-    }
-
-    fseek(f, 0, SEEK_END);
-    size_t size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-
-    void* buffer = malloc(size);
-    if (!buffer) {
-        fclose(f);
-        env->ReleaseStringUTFChars(path, nativePath);
-        return JNI_FALSE;
-    }
-
-    fread(buffer, 1, size, f);
-    fclose(f);
-
-    bool success = g_retro_unserialize(buffer, size);
-    if (success) {
-        LOGI("State loaded from: %s", nativePath);
-    }
-
-    free(buffer);
-    env->ReleaseStringUTFChars(path, nativePath);
-    return success ? JNI_TRUE : JNI_FALSE;
-}
-
-JNIEXPORT void JNICALL
-Java_com_elysium_console_bridge_ElysiumBridge_nativeSetVisualEffect(
-    JNIEnv* env, jobject thiz, jint effectId
-) {
-    g_renderer.setVisualEffect(effectId);
+JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
+    g_jvm = vm;
+    JNIEnv* env;
+    if (vm->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK) return JNI_ERR;
+    jclass clazz = env->FindClass("com/elysium/console/bridge/ElysiumBridge");
+    g_onRumbleMethod = env->GetMethodID(clazz, "onRumble", "(I)V");
+    return JNI_VERSION_1_6;
 }
 
 } // extern "C"

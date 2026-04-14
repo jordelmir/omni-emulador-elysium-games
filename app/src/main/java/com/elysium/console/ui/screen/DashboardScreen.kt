@@ -154,6 +154,8 @@ fun DashboardScreen(
         label = "glow_alpha"
     )
 
+    var selectedRomForDetail by remember { mutableStateOf<com.elysium.console.domain.model.RomFile?>(null) }
+
     Scaffold(
         modifier = modifier.fillMaxSize(),
         containerColor = DeepBlack,
@@ -331,13 +333,26 @@ fun DashboardScreen(
                         ) { rom ->
                             RomCard(
                                 rom = rom,
-                                onClick = { onRomClick(rom.path) }
+                                onClick = { onRomClick(rom.path) },
+                                onLongClick = { selectedRomForDetail = rom }
                             )
                         }
                     }
                 }
             }
         }
+    }
+
+    // Ultra Edition Detail Sheet
+    selectedRomForDetail?.let { rom ->
+        com.elysium.console.ui.component.GameDetailSheet(
+            rom = rom,
+            onLaunch = {
+                selectedRomForDetail = null
+                onRomClick(rom.path)
+            },
+            onDismiss = { selectedRomForDetail = null }
+        )
     }
 }
 

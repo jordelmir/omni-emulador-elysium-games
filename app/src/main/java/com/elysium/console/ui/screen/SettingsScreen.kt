@@ -195,6 +195,20 @@ fun SettingsScreen(
                     }
                 )
             }
+
+            item {
+                val upscaleMode by viewModel.upscaleMode.collectAsState()
+                val isUpscaled = upscaleMode == 1
+                SettingsToggleItem(
+                    title = "Omni-Scale Ultra (xBRZ)",
+                    subtitle = "High-fidelity spatial upscaling",
+                    icon = Icons.Default.HighQuality,
+                    checked = isUpscaled,
+                    onCheckedChange = { checked ->
+                        viewModel.setUpscaleMode(if (checked) 1 else 0)
+                    }
+                )
+            }
             
             item { Spacer(modifier = Modifier.height(40.dp)) }
         }

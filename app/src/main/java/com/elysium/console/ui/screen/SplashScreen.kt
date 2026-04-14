@@ -1,59 +1,53 @@
 package com.elysium.console.ui.screen
 
-import androidx.compose.animation.core.*
-import androidx.compose.foundation.Image
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.elysium.console.R
-import com.elysium.console.ui.theme.DeepBlack
 import com.elysium.console.ui.theme.NeonGreen
+import com.elysium.console.ui.theme.DeepBlack
 import kotlinx.coroutines.delay
 
 /**
- * Premium Splash Screen for Omni Elysium.
+ * Cinematic startup screen for Omni Elysium Vanguard.
+ * Features a neon-pulse logo animation and system initialization sequence.
  */
 @Composable
-fun SplashScreen(onNavigateToDashboard: () -> Unit) {
-    val infiniteTransition = rememberInfiniteTransition(label = "splash_glow")
-    
-    val alpha by animateFloatAsState(
-        targetValue = 1f,
-        animationSpec = tween(1500, easing = LinearEasing),
-        label = "fade_in"
-    )
-
-    val scale by animateFloatAsState(
-        targetValue = 1.1f,
-        animationSpec = tween(2000, easing = FastOutSlowInEasing),
-        label = "scale_up"
-    )
-
-    val pulse by infiniteTransition.animateFloat(
-        initialValue = 0.8f,
-        targetValue = 1.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1000, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "pulse"
-    )
+fun SplashScreen(onAnimationFinished: () -> Unit) {
+    var startAnimation by remember { mutableStateOf(false) }
+    val alpha = remember { Animatable(0f) }
+    val scale = remember { Animatable(0.8f) }
 
     LaunchedEffect(Unit) {
-        delay(2500) // Cinematic delay
-        onNavigateToDashboard()
+        startAnimation = true
+        alpha.animateTo(1f, tween(1000, easing = LinearEasing))
+        scale.animateTo(1.1f, tween(1500, easing = LinearEasing))
+        delay(500)
+        onAnimationFinished()
     }
 
     Box(
@@ -62,36 +56,45 @@ fun SplashScreen(onNavigateToDashboard: () -> Unit) {
             .background(DeepBlack),
         contentAlignment = Alignment.Center
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Image(
-                painter = painterResource(id = R.drawable.omni_elysium_logo),
-                contentDescription = "Omni Logo",
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            // Placeholder for Logo / Symbol
+            Box(
                 modifier = Modifier
-                    .size(200.dp)
-                    .scale(scale * pulse)
-                    .alpha(alpha)
-            )
-            
-            Spacer(modifier = Modifier.height(32.dp))
-            
+                    .size(120.dp)
+                    .scale(scale.value)
+                    .alpha(alpha.value)
+                    .background(NeonGreen.copy(alpha = 0.1f), shape = androidx.compose.foundation.shape.CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "Ω",
+                    style = MaterialTheme.typography.displayLarge.copy(
+                        color = NeonGreen,
+                        fontSize = 80.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                )
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
             Text(
                 text = "OMNI ELYSIUM",
-                style = MaterialTheme.typography.headlineMedium,
-                color = NeonGreen,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 8.sp,
-                modifier = Modifier.alpha(alpha)
+                style = MaterialTheme.typography.headlineLarge.copy(
+                    color = Color.White,
+                    letterSpacing = 8.sp,
+                    fontWeight = FontWeight.Light
+                ),
+                modifier = Modifier.alpha(alpha.value)
             )
-            
+
             Text(
-                text = "UNIVERSAL ORCHESTRATOR",
-                style = MaterialTheme.typography.labelSmall,
-                color = NeonGreen.copy(alpha = 0.6f),
-                letterSpacing = 4.sp,
-                modifier = Modifier.alpha(alpha).padding(top = 8.dp)
+                text = "VANGUARD EDITION",
+                style = MaterialTheme.typography.labelMedium.copy(
+                    color = NeonGreen,
+                    letterSpacing = 2.sp
+                ),
+                modifier = Modifier.alpha(alpha.value)
             )
         }
     }

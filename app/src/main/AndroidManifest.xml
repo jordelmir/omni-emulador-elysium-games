@@ -10,6 +10,7 @@
 
     <!-- Keep screen on during emulation -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <!-- OpenGL ES 3.0 requirement -->
     <uses-feature

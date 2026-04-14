@@ -123,4 +123,26 @@ object ElysiumBridge {
      * @return true if load succeeded
      */
     external fun nativeLoadState(path: String): Boolean
+
+    /**
+     * Sets a visual effect for the renderer.
+     * @param effectId 0 for None, 1 for CRT Scanlines
+     */
+    external fun nativeSetVisualEffect(effectId: Int)
+
+    /**
+     * Sets an upscaling mode.
+     * @param mode 0 for Original, 1 for Scale2x (Omni-Scale Ultra)
+     */
+    external fun nativeSetUpscaler(mode: Int)
+
+    var rumbleListener: ((intensity: Int) -> Unit)? = null
+
+    /**
+     * Called by JNI when the core requests rumble.
+     */
+    @JvmStatic
+    fun onRumble(intensity: Int) {
+        rumbleListener?.invoke(intensity)
+    }
 }

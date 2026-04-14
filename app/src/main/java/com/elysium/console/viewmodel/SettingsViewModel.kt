@@ -33,13 +33,20 @@ class SettingsViewModel(
     private val _visualEffectId = MutableStateFlow(settingsManager.getVisualEffectId())
     val visualEffectId: StateFlow<Int> = _visualEffectId.asStateFlow()
 
+    private val _upscaleMode = MutableStateFlow(settingsManager.getUpscaleMode())
+    val upscaleMode: StateFlow<Int> = _upscaleMode.asStateFlow()
+
     init {
-        // Apply existing driver on startup
-        _driverPath.value?.let { path ->
-            ElysiumBridge.nativeSetGpuDriver(path)
-        }
-        // Apply visual effect on startup
+        // Apply existing settings on startup
+        _driverPath.value?.let { ElysiumBridge.nativeSetGpuDriver(it) }
         ElysiumBridge.nativeSetVisualEffect(_visualEffectId.value)
+        ElysiumBridge.nativeSetUpscaler(_upscaleMode.value)
+    }
+
+    fun setUpscaleMode(mode: Int) {
+        settingsManager.setUpscaleMode(mode)
+        _upscaleMode.value = mode
+        ElysiumBridge.nativeSetUpscaler(mode)
     }
 
     fun setVisualEffectId(id: Int) {
