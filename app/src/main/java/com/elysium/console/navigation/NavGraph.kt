@@ -40,6 +40,7 @@ import java.net.URLEncoder
  * Navigation routes for the Elysium Console app.
  */
 object Routes {
+    const val SPLASH = "splash"
     const val DASHBOARD = "dashboard"
     const val PLAYER = "player/{romPath}"
     const val SETTINGS = "settings"
@@ -93,9 +94,19 @@ fun ElysiumNavGraph(
 
     NavHost(
         navController = navController,
-        startDestination = Routes.DASHBOARD,
+        startDestination = Routes.SPLASH,
         modifier = modifier
     ) {
+        composable(Routes.SPLASH) {
+            com.elysium.console.ui.screen.SplashScreen(
+                onAnimationFinished = {
+                    navController.navigate(Routes.DASHBOARD) {
+                        popUpTo(Routes.SPLASH) { inclusive = true }
+                    }
+                }
+            )
+        }
+
         composable(Routes.DASHBOARD) {
             val dashboardViewModel: DashboardViewModel = viewModel(factory = dashboardFactory)
             DashboardScreen(

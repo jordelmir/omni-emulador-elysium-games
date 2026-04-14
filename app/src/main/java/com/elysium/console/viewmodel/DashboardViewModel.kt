@@ -59,7 +59,7 @@ class DashboardViewModel(
         viewModelScope.launch {
             try {
                 // Use Coil to get the bitmap directly
-                val loader = coil.ImageLoader(context)
+                val loader = coil.ImageLoader.Builder(context).build()
                 val request = coil.request.ImageRequest.Builder(context)
                     .data(rom.coverArtPath)
                     .allowHardware(false) // Required for Palette
