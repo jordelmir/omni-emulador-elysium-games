@@ -34,7 +34,7 @@ class MainActivity : ComponentActivity() {
             val saveDir = filesDir.resolve("saves").absolutePath
             com.elysium.console.bridge.ElysiumBridge.nativeInit(systemDir, saveDir)
             android.util.Log.i("MainActivity", "Native bridge initialized successfully.")
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             android.util.Log.e("MainActivity", "CRITICAL: Native init failed: ${e.message}")
         }
 

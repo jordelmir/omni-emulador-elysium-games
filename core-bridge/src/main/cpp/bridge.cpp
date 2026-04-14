@@ -83,6 +83,7 @@ retro_unserialize_t           g_retro_unserialize = nullptr;
 
 jmethodID g_onRumbleMethod = nullptr;
 jobject g_bridgeObject = nullptr;
+jclass g_bridgeClass = nullptr;
 JavaVM* g_jvm = nullptr;
 
 elysium::HardwareBufferRenderer g_renderer;
@@ -634,7 +635,7 @@ bool core_set_rumble_state(unsigned port, enum retro_rumble_effect effect, uint1
         if (g_jvm->AttachCurrentThread(&env, nullptr) != JNI_OK) return false;
         detach = true;
     }
-    if (env) env->CallVoidMethod(g_bridgeObject, g_onRumbleMethod, (jint)strength);
+    if (env) env->CallStaticVoidMethod(g_bridgeClass, g_onRumbleMethod, (jint)strength);
     if (detach) g_jvm->DetachCurrentThread();
     return true;
 }
@@ -643,8 +644,9 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
     g_jvm = vm;
     JNIEnv* env;
     if (vm->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK) return JNI_ERR;
-    jclass clazz = env->FindClass("com/elysium/console/bridge/ElysiumBridge");
-    g_onRumbleMethod = env->GetMethodID(clazz, "onRumble", "(I)V");
+    jclass localClass = env->FindClass("com/elysium/console/bridge/ElysiumBridge");
+    g_bridgeClass = (jclass)env->NewGlobalRef(localClass);
+    g_onRumbleMethod = env->GetStaticMethodID(g_bridgeClass, "onRumble", "(I)V");
     return JNI_VERSION_1_6;
 }
 

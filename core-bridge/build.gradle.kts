@@ -15,13 +15,12 @@ android {
         consumerProguardFiles("consumer-rules.pro")
 
         ndk {
-            abiFilters += listOf("arm64-v8a")
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
         }
 
         externalNativeBuild {
             cmake {
-                cppFlags += listOf("-O3", "-march=armv8-a+simd", "-std=c++17")
-                arguments += listOf("-DANDROID_ARM_NEON=TRUE")
+                cppFlags += listOf("-O3", "-std=c++17")
             }
         }
     }

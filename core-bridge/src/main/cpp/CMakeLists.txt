@@ -20,7 +20,6 @@ add_library(elysium-bridge SHARED
 # ══════════════════════════════════════════
     target_compile_options(elysium-bridge PRIVATE
         -O3
-        -march=armv8-a+simd
         -ffast-math
         -fno-exceptions
     -fno-rtti
