@@ -32,9 +32,11 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.foundation.Image
+import androidx.compose.ui.res.painterResource
+import com.elysium.console.R
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
@@ -55,6 +57,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalContext
@@ -72,6 +75,7 @@ import com.elysium.console.ui.theme.NeonGreenGlow
 import com.elysium.console.ui.theme.NeonRed
 import com.elysium.console.ui.theme.SurfaceDark
 import com.elysium.console.ui.theme.TextSecondary
+import com.elysium.console.ui.theme.TextTertiary
 import com.elysium.console.viewmodel.DashboardViewModel
 
 /**
@@ -84,6 +88,7 @@ import com.elysium.console.viewmodel.DashboardViewModel
 fun DashboardScreen(
     viewModel: DashboardViewModel,
     onRomClick: (String) -> Unit,
+    onSettingsClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val roms by viewModel.roms.collectAsState()
@@ -122,6 +127,15 @@ fun DashboardScreen(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         uri?.let { selectedUri ->
+            // Grant persistable permission for the specific file
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    selectedUri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (e: Exception) {
+                // Non-persistable or already granted
+            }
             selectedFileUri = selectedUri
             // Navigate to player with the selected ROM path
             onRomClick(selectedUri.toString())
@@ -149,20 +163,28 @@ fun DashboardScreen(
                     Row(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.primary)
+                        Image(
+                            painter = painterResource(id = R.drawable.omni_elysium_logo),
+                            contentDescription = "Omni Logo",
+                            modifier = Modifier.size(32.dp)
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "OMNI EMULADOR ELYSIUM GAMES",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            letterSpacing = 2.sp,
-                            fontWeight = FontWeight.Bold
-                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text(
+                                text = "OMNI ELYSIUM",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                letterSpacing = 2.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "UNIVERSAL ORCHESTRATOR",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextTertiary,
+                                fontSize = 8.sp,
+                                letterSpacing = 1.sp
+                            )
+                        }
                     }
                 },
                 actions = {
@@ -173,7 +195,7 @@ fun DashboardScreen(
                             tint = TextSecondary
                         )
                     }
-                    IconButton(onClick = { /* Settings action */ }) {
+                    IconButton(onClick = onSettingsClick) {
                         Icon(
                             imageVector = Icons.Default.Settings,
                             contentDescription = "Settings",
@@ -208,16 +230,23 @@ fun DashboardScreen(
         floatingActionButton = {
             FloatingActionButton(
                 onClick = {
-                    filePickerLauncher.launch(arrayOf("*/*"))
+                    val romMimeTypes = arrayOf(
+                        "application/octet-stream",
+                        "application/x-iso9660-image",
+                        "application/zip",
+                        "application/x-7z-compressed",
+                        "application/x-rar-compressed"
+                    )
+                    filePickerLauncher.launch(romMimeTypes)
                 },
                 containerColor = NeonGreen.copy(alpha = 0.15f),
                 contentColor = NeonGreen,
                 shape = CircleShape
             ) {
                 Icon(
-                    imageVector = Icons.Default.FolderOpen,
+                    imageVector = Icons.Default.Add,
                     contentDescription = "Open ROM file",
-                    modifier = Modifier.size(24.dp)
+                    modifier = Modifier.size(32.dp)
                 )
             }
         }
@@ -235,15 +264,8 @@ fun DashboardScreen(
                 ) {
                     CircularProgressIndicator(color = NeonGreen)
                 }
-            } else if (roms.isEmpty()) {
-                // Empty state
-                EmptyLibraryState(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(32.dp)
-                )
             } else {
-                // ROM Grid
+                // Main Library Content
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(2),
                     contentPadding = PaddingValues(12.dp),
@@ -251,14 +273,67 @@ fun DashboardScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    items(
-                        items = roms,
-                        key = { it.id }
-                    ) { rom ->
-                        RomCard(
-                            rom = rom,
-                            onClick = { onRomClick(rom.path) }
-                        )
+                    // HERO LOGO SECTION
+                    item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(2) }) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 32.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            val pulse by infiniteTransition.animateFloat(
+                                initialValue = 0.95f,
+                                targetValue = 1.05f,
+                                animationSpec = infiniteRepeatable(
+                                    animation = tween(1500, easing = LinearEasing),
+                                    repeatMode = RepeatMode.Reverse
+                                ),
+                                label = "hero_pulse"
+                            )
+                            
+                            Image(
+                                painter = painterResource(id = R.drawable.omni_elysium_logo),
+                                contentDescription = "Omni Logo",
+                                modifier = Modifier
+                                    .size(120.dp)
+                                    .scale(pulse)
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                text = "OMNI ELYSIUM CONSOLE",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = NeonGreen,
+                                letterSpacing = 4.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "THE WORLD'S PREMIER EMULATION ORCHESTRATOR",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextTertiary,
+                                fontSize = 8.sp,
+                                letterSpacing = 2.sp
+                            )
+                        }
+                    }
+
+                    if (roms.isEmpty()) {
+                        item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(2) }) {
+                            EmptyLibraryState(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(32.dp)
+                            )
+                        }
+                    } else {
+                        items(
+                            items = roms,
+                            key = { it.id }
+                        ) { rom ->
+                            RomCard(
+                                rom = rom,
+                                onClick = { onRomClick(rom.path) }
+                            )
+                        }
                     }
                 }
             }

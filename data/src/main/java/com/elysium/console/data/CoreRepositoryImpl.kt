@@ -38,6 +38,14 @@ class CoreRepositoryImpl : CoreRepository {
             version = "0.9.5",
             supportedExtensions = listOf("nds", "dsi")
         ),
+        "pcsx_rearmed_libretro" to EmulatorCore(
+            id = "pcsx_rearmed_libretro",
+            name = "PCSX ReARMed",
+            platform = Platform.PS1,
+            libraryPath = "pcsx_rearmed_libretro_android.so",
+            version = "r22",
+            supportedExtensions = listOf("bin", "cue", "img", "mdf", "pbp", "toc", "cbn", "m3u", "chd", "iso")
+        ),
         "ppsspp_libretro" to EmulatorCore(
             id = "ppsspp_libretro",
             name = "PPSSPP (Core)",

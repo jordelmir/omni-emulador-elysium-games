@@ -82,4 +82,7 @@ dependencies {
 
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
+
+    // Coil (Image Loading)
+    implementation("io.coil-kt:coil-compose:2.6.0")
 }

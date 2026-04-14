@@ -36,17 +36,14 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.elysium.console.domain.model.RomFile
-import com.elysium.console.ui.theme.DeepBlack
-import com.elysium.console.ui.theme.NeonGreen
-import com.elysium.console.ui.theme.NeonGreenGlow
-import com.elysium.console.ui.theme.SurfaceCard
-import com.elysium.console.ui.theme.SurfaceElevated
-import com.elysium.console.ui.theme.TextSecondary
+import coil.compose.AsyncImage
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Album
+import androidx.compose.material3.Icon
 
 /**
- * A visually rich card displaying ROM information with gradient overlay,
- * platform badge, press animation, and neon glow effect.
+ * A visually rich card displaying ROM information with cinematic boxart,
+ * platform badge, press animation, and multi-disc indicators.
  */
 @Composable
 fun RomCard(
@@ -79,39 +76,39 @@ fun RomCard(
         )
     ) {
         Column {
-            // Cover Art Area with gradient overlay
+            // Cover Art Area with cinematic loading
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(1f)
+                    .aspectRatio(0.75f) // Typical boxart ratio
                     .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
-                    .background(
-                        Brush.linearGradient(
-                            colors = listOf(
-                                SurfaceElevated,
-                                DeepBlack
-                            ),
-                            start = Offset(0f, 0f),
-                            end = Offset(0f, Float.POSITIVE_INFINITY)
-                        )
-                    )
+                    .background(DeepBlack)
             ) {
-                // Platform icon placeholder — large centered abbreviation
-                Text(
-                    text = rom.platform.abbreviation,
-                    style = MaterialTheme.typography.displayLarge.copy(
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 36.sp,
-                        color = NeonGreen.copy(alpha = 0.3f),
-                        shadow = Shadow(
-                            color = NeonGreenGlow,
-                            blurRadius = 20f
-                        )
-                    ),
-                    modifier = Modifier.align(Alignment.Center)
-                )
+                if (rom.hasCoverArt) {
+                    AsyncImage(
+                        model = rom.coverArtPath,
+                        contentDescription = rom.name,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                    )
+                } else {
+                    // Platform icon placeholder — large centered abbreviation
+                    Text(
+                        text = rom.platform.abbreviation,
+                        style = MaterialTheme.typography.displayLarge.copy(
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 36.sp,
+                            color = NeonGreen.copy(alpha = 0.3f),
+                            shadow = Shadow(
+                                color = NeonGreenGlow,
+                                blurRadius = 20f
+                            )
+                        ),
+                        modifier = Modifier.align(Alignment.Center)
+                    )
+                }
 
-                // Bottom gradient overlay
+                // Bottom gradient overlay for readability
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -119,12 +116,33 @@ fun RomCard(
                             Brush.verticalGradient(
                                 colors = listOf(
                                     Color.Transparent,
-                                    SurfaceCard.copy(alpha = 0.9f)
+                                    DeepBlack.copy(alpha = 0.8f)
                                 ),
-                                startY = 150f
+                                startY = 200f
                             )
                         )
                 )
+
+                // Multi-Disc Badge
+                if (rom.isMultiDisc) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(8.dp)
+                            .background(
+                                color = Color(0xFFFFD700).copy(alpha = 0.9f),
+                                shape = RoundedCornerShape(4.dp)
+                            )
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Album,
+                            contentDescription = "Multi-Disc",
+                            tint = DeepBlack,
+                            modifier = Modifier.height(12.dp)
+                        )
+                    }
+                }
 
                 // Platform badge
                 Box(

@@ -3,6 +3,7 @@ package com.elysium.console.navigation
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
+import android.content.Context
 import android.widget.Toast
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberCoroutineScope
@@ -24,9 +25,14 @@ import com.elysium.console.domain.model.RomFile
 import com.elysium.console.domain.usecase.SelectCoreUseCase
 import com.elysium.console.ui.screen.DashboardScreen
 import com.elysium.console.ui.screen.PlayerScreen
+import com.elysium.console.ui.screen.SettingsScreen
 import com.elysium.console.viewmodel.DashboardViewModel
 import com.elysium.console.viewmodel.EmulationViewModel
+import com.elysium.console.viewmodel.SettingsViewModel
+import com.elysium.console.data.SettingsManager
 import kotlinx.coroutines.launch
+import com.elysium.console.data.RomRepositoryImpl
+import com.elysium.console.data.util.NucleusFileProvisioner
 import java.net.URLDecoder
 import java.net.URLEncoder
 
@@ -36,6 +42,7 @@ import java.net.URLEncoder
 object Routes {
     const val DASHBOARD = "dashboard"
     const val PLAYER = "player/{romPath}"
+    const val SETTINGS = "settings"
 
     fun playerRoute(romPath: String): String {
         val encoded = URLEncoder.encode(romPath, "UTF-8")
@@ -57,20 +64,30 @@ fun ElysiumNavGraph(
     val scope = rememberCoroutineScope()
     val hardwareMonitor = SystemTelemetryProvider(context)
     val coreRepository = CoreRepositoryImpl()
+    val settingsManager = SettingsManager(context)
+    val romRepository = RomRepositoryImpl(context)
+    val provisioner = NucleusFileProvisioner(context)
     val selectCoreUseCase = SelectCoreUseCase(coreRepository)
 
     // Manual DI for ViewModels
     val dashboardFactory = object : ViewModelProvider.Factory {
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             @Suppress("UNCHECKED_CAST")
-            return DashboardViewModel(hardwareMonitor) as T
+            return DashboardViewModel(hardwareMonitor, settingsManager, romRepository) as T
+        }
+    }
+
+    val settingsFactory = object : ViewModelProvider.Factory {
+        override fun <T : ViewModel> create(modelClass: Class<T>): T {
+            @Suppress("UNCHECKED_CAST")
+            return SettingsViewModel(settingsManager, provisioner) as T
         }
     }
 
     val emulationFactory = object : ViewModelProvider.Factory {
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             @Suppress("UNCHECKED_CAST")
-            return EmulationViewModel(hardwareMonitor, selectCoreUseCase) as T
+            return EmulationViewModel(context, hardwareMonitor, selectCoreUseCase) as T
         }
     }
 
@@ -117,7 +134,18 @@ fun ElysiumNavGraph(
                             navController.navigate(Routes.playerRoute(romPath))
                         }
                     }
+                },
+                onSettingsClick = {
+                    navController.navigate(Routes.SETTINGS)
                 }
+            )
+        }
+
+        composable(Routes.SETTINGS) {
+            val settingsViewModel: SettingsViewModel = viewModel(factory = settingsFactory)
+            SettingsScreen(
+                viewModel = settingsViewModel,
+                onBack = { navController.popBackStack() }
             )
         }
 

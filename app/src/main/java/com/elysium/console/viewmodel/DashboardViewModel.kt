@@ -7,6 +7,8 @@ import com.elysium.console.domain.model.Platform
 import com.elysium.console.domain.model.RomFile
 import com.elysium.console.domain.model.TelemetryData
 import com.elysium.console.domain.repository.HardwareMonitor
+import com.elysium.console.domain.repository.RomRepository
+import com.elysium.console.data.SettingsManager
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -20,7 +22,9 @@ import kotlinx.coroutines.launch
  * for the real-time monitoring bar.
  */
 class DashboardViewModel(
-    private val hardwareMonitor: HardwareMonitor
+    private val hardwareMonitor: HardwareMonitor,
+    private val settingsManager: SettingsManager,
+    private val romRepository: RomRepository
 ) : ViewModel() {
 
     private val _roms = MutableStateFlow<List<RomFile>>(emptyList())
@@ -35,8 +39,6 @@ class DashboardViewModel(
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
-    private val romRepository = RomRepositoryImpl()
-
     init {
         refreshLibrary()
         startRealTelemetryMonitoring()
@@ -49,10 +51,16 @@ class DashboardViewModel(
         viewModelScope.launch {
             _isLoading.value = true
             try {
-                val scannedRoms = romRepository.scanForRoms()
+                val folders = settingsManager.getRomFolders().toList()
+                val scannedRoms = if (folders.isEmpty()) {
+                    emptyList()
+                } else {
+                    // Try to cast to Impl for scanFolders or use contract scanDirectory
+                    (romRepository as? com.elysium.console.data.RomRepositoryImpl)?.scanFolders(folders) 
+                        ?: folders.flatMap { romRepository.scanDirectory(it) }
+                }
                 _roms.value = scannedRoms
             } catch (e: Exception) {
-                // Return empty library on storage exceptions
                 _roms.value = emptyList()
             } finally {
                 _isLoading.value = false

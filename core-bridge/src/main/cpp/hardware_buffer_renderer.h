@@ -131,12 +131,29 @@ public:
         uint32_t copyWidth = width * 4; // 4 bytes per pixel
 
         for (uint32_t y = 0; y < height; ++y) {
-            memcpy(dst, src, copyWidth);
+            if (mEffectId == 1 && (y % 2 != 0)) {
+                // Apply "CRT Scanline" effect: Darken pixels on every odd row
+                // This gives a classic TV look without expensive GPU shaders
+                const uint32_t* srcPixels = reinterpret_cast<const uint32_t*>(src);
+                uint32_t* dstPixels = reinterpret_cast<uint32_t*>(dst);
+                for (uint32_t x = 0; x < width; ++x) {
+                    uint32_t p = srcPixels[x];
+                    // Darken R, G, B components (approx. 50% dark)
+                    dstPixels[x] = (p & 0xFF000000) | ((p & 0x00FEFEFE) >> 1);
+                }
+            } else {
+                memcpy(dst, src, copyWidth);
+            }
             src += pitch;
             dst += dstStride;
         }
 
         AHardwareBuffer_unlock(mBuffer, nullptr);
+    }
+
+    void setVisualEffect(int effectId) {
+        mEffectId = effectId;
+        HBR_LOGI("Visual effect set to: %d", effectId);
     }
 
     /**

@@ -42,10 +42,11 @@ object ElysiumBridge {
      * Loads a ROM file into the currently active core.
      * Initializes the AHardwareBuffer renderer based on the core's AV info.
      *
-     * @param romPath Absolute path to the ROM file
+     * @param romPath Absolute path (or virtual /proc/self/fd path) to the ROM file
+     * @param fd      Open file descriptor for SAF files, or -1 for standard paths
      * @return true if the ROM loaded successfully
      */
-    external fun nativeLoadRom(romPath: String): Boolean
+    external fun nativeLoadRom(romPath: String, fd: Int): Boolean
 
     /**
      * Runs one (or more) emulation frames.
@@ -100,4 +101,26 @@ object ElysiumBridge {
      * @param retroId Libretro button ID (RETRO_DEVICE_ID_JOYPAD_*)
      */
     external fun nativeSetButton(retroId: Int, pressed: Boolean)
+
+    /**
+     * Sets a custom GPU driver (Vulkan ICD) path.
+     * This environment hook directs the Vulkan loader to use the specified .so file.
+     * 
+     * @param driverPath Absolute path to the custom .so driver, or null for system default
+     */
+    external fun nativeSetGpuDriver(driverPath: String?)
+
+    /**
+     * Saves the current game state to a file.
+     * @param path Absolute path to save the state file
+     * @return true if save succeeded
+     */
+    external fun nativeSaveState(path: String): Boolean
+
+    /**
+     * Loads a previously saved game state.
+     * @param path Absolute path to the state file
+     * @return true if load succeeded
+     */
+    external fun nativeLoadState(path: String): Boolean
 }

@@ -54,6 +54,9 @@ retro_load_game_t             g_retro_load_game = nullptr;
 retro_unload_game_t           g_retro_unload_game = nullptr;
 retro_run_t                   g_retro_run = nullptr;
 retro_reset_t                 g_retro_reset = nullptr;
+retro_serialize_size_t        g_retro_serialize_size = nullptr;
+retro_serialize_t             g_retro_serialize = nullptr;
+retro_unserialize_t           g_retro_unserialize = nullptr;
 
 // Zero-copy renderer
 elysium::HardwareBufferRenderer g_renderer;
@@ -270,10 +273,13 @@ Java_com_elysium_console_bridge_ElysiumBridge_nativeLoadCore(
     ok &= loadSymbol(g_retro_set_input_state, "retro_set_input_state");
     ok &= loadSymbol(g_retro_load_game, "retro_load_game");
     ok &= loadSymbol(g_retro_unload_game, "retro_unload_game");
-    ok &= loadSymbol(g_retro_run, "retro_run");
-    ok &= loadSymbol(g_retro_reset, "retro_reset");
+    g_retro_run = (retro_run_t)dlsym(g_coreHandle, "retro_run");
+    g_retro_reset = (retro_reset_t)dlsym(g_coreHandle, "retro_reset");
+    g_retro_serialize_size = (retro_serialize_size_t)dlsym(g_coreHandle, "retro_serialize_size");
+    g_retro_serialize = (retro_serialize_t)dlsym(g_coreHandle, "retro_serialize");
+    g_retro_unserialize = (retro_unserialize_t)dlsym(g_coreHandle, "retro_unserialize");
 
-    if (!ok) {
+    if (!g_retro_init || !g_retro_load_game || !g_retro_run) {
         LOGE("Failed to resolve all Libretro symbols");
         dlclose(g_coreHandle);
         g_coreHandle = nullptr;
@@ -303,27 +309,35 @@ Java_com_elysium_console_bridge_ElysiumBridge_nativeLoadCore(
 
 JNIEXPORT jboolean JNICALL
 Java_com_elysium_console_bridge_ElysiumBridge_nativeLoadRom(
-    JNIEnv* env, jobject thiz, jstring romPath
+    JNIEnv* env, jobject thiz, jstring romPath, jint fd
 ) {
     if (!g_coreHandle || !g_retro_load_game) {
         LOGE("No core loaded");
         return JNI_FALSE;
     }
 
-    const char* path = env->GetStringUTFChars(romPath, nullptr);
-    LOGI("Loading ROM: %s", path);
+    char finalPath[1024];
+    if (fd >= 0) {
+        // Use the /proc/self/fd trick to bridge SAF descriptors to native fopen
+        sprintf(finalPath, "/proc/self/fd/%d", fd);
+        LOGI("Loading ROM via File Descriptor: %s", finalPath);
+    } else {
+        const char* path = env->GetStringUTFChars(romPath, nullptr);
+        strncpy(finalPath, path, sizeof(finalPath) - 1);
+        env->ReleaseStringUTFChars(romPath, path);
+        LOGI("Loading ROM via path: %s", finalPath);
+    }
 
     retro_game_info gameInfo = {};
-    gameInfo.path = path;
+    gameInfo.path = finalPath;
     gameInfo.data = nullptr;
     gameInfo.size = 0;
     gameInfo.meta = nullptr;
 
     bool loaded = g_retro_load_game(&gameInfo);
-    env->ReleaseStringUTFChars(romPath, path);
 
     if (!loaded) {
-        LOGE("retro_load_game failed");
+        LOGE("retro_load_game failed for path: %s", finalPath);
         return JNI_FALSE;
     }
 
@@ -478,6 +492,102 @@ Java_com_elysium_console_bridge_ElysiumBridge_nativeSetButton(
     jint retroId, jboolean pressed
 ) {
     g_inputManager.setButton(static_cast<unsigned>(retroId), pressed == JNI_TRUE);
+}
+
+JNIEXPORT void JNICALL
+Java_com_elysium_console_bridge_ElysiumBridge_nativeSetGpuDriver(
+    JNIEnv* env, jobject thiz, jstring driverPath
+) {
+    if (driverPath == nullptr) {
+        unsetenv("VK_ICD_FILENAMES");
+        LOGI("GPU Driver reset to system default");
+        return;
+    }
+
+    const char* path = env->GetStringUTFChars(driverPath, nullptr);
+    if (path && strlen(path) > 0) {
+        // Redirect Vulkan loader to the custom ICD (Turnip/Mesa)
+        setenv("VK_ICD_FILENAMES", path, 1);
+        LOGI("Custom GPU Driver set: %s", path);
+    } else {
+        unsetenv("VK_ICD_FILENAMES");
+        LOGI("GPU Driver reset to system default (empty path)");
+    }
+    env->ReleaseStringUTFChars(driverPath, path);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_elysium_console_bridge_ElysiumBridge_nativeSaveState(
+    JNIEnv* env, jobject thiz, jstring path
+) {
+    if (!g_coreHandle || !g_retro_serialize || !g_retro_serialize_size) return JNI_FALSE;
+
+    size_t size = g_retro_serialize_size();
+    if (size == 0) return JNI_FALSE;
+
+    void* buffer = malloc(size);
+    if (!buffer) return JNI_FALSE;
+
+    bool success = g_retro_serialize(buffer, size);
+    if (success) {
+        const char* nativePath = env->GetStringUTFChars(path, nullptr);
+        FILE* f = fopen(nativePath, "wb");
+        if (f) {
+            fwrite(buffer, 1, size, f);
+            fclose(f);
+            LOGI("State saved to: %s (%zu bytes)", nativePath, size);
+        } else {
+            success = false;
+        }
+        env->ReleaseStringUTFChars(path, nativePath);
+    }
+
+    free(buffer);
+    return success ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_elysium_console_bridge_ElysiumBridge_nativeLoadState(
+    JNIEnv* env, jobject thiz, jstring path
+) {
+    if (!g_coreHandle || !g_retro_unserialize) return JNI_FALSE;
+
+    const char* nativePath = env->GetStringUTFChars(path, nullptr);
+    FILE* f = fopen(nativePath, "rb");
+    if (!f) {
+        env->ReleaseStringUTFChars(path, nativePath);
+        return JNI_FALSE;
+    }
+
+    fseek(f, 0, SEEK_END);
+    size_t size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    void* buffer = malloc(size);
+    if (!buffer) {
+        fclose(f);
+        env->ReleaseStringUTFChars(path, nativePath);
+        return JNI_FALSE;
+    }
+
+    fread(buffer, 1, size, f);
+    fclose(f);
+
+    bool success = g_retro_unserialize(buffer, size);
+    if (success) {
+        LOGI("State loaded from: %s", nativePath);
+    }
+
+    free(buffer);
+    env->ReleaseStringUTFChars(path, nativePath);
+    return success ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL
+Java_com_elysium_console_bridge_ElysiumBridge_nativeSetVisualEffect(
+    JNIEnv* env, jobject thiz, jint effectId
+) {
+    g_renderer.setVisualEffect(effectId);
 }
 
 } // extern "C"

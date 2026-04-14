@@ -1,5 +1,10 @@
 package com.elysium.console.data
+import com.elysium.console.data.util.MetadataScraper
 
+import android.content.Context
+import android.net.Uri
+import android.util.Log
+import androidx.documentfile.provider.DocumentFile
 import com.elysium.console.domain.model.Platform
 import com.elysium.console.domain.model.RomFile
 import com.elysium.console.domain.repository.RomRepository as RomRepositoryContract
@@ -9,117 +14,173 @@ import java.io.File
 import java.security.MessageDigest
 
 /**
- * Repository for discovering and managing ROM files on the device.
- *
- * Scans specified directories for files matching known ROM extensions
- * and returns them as [RomFile] entities with auto-detected platforms.
+ * Universal ROM Discovery Engine for Android 14 (Scoped Storage).
+ * Uses DocumentFile for SAF tree traversal and legacy File API for internal data.
  */
-class RomRepositoryImpl : RomRepositoryContract {
+class RomRepositoryImpl(private val context: Context) : RomRepositoryContract {
 
     companion object {
-        /**
-         * Known ROM file extensions grouped by platform.
-         */
+        private const val TAG = "RomRepository"
+        private const val MIN_GAME_SIZE_BYTES = 8 * 1024L 
+
         private val ROM_EXTENSIONS = setOf(
             "nes", "smc", "sfc", "z64", "n64", "v64",
             "gba", "gbc", "gb", "nds", "3ds", "cia", "cxi",
             "gcm", "gcz", "iso", "wbfs", "wad",
             "nsp", "xci",
             "bin", "cue", "pbp", "chd", "cso",
-            "md", "gen",
-            "zip"
-        )
-
-        /**
-         * Default directories to scan for ROMs.
-         */
-        private val SCAN_DIRECTORIES = listOf(
-            "/storage/emulated/0/Roms",
-            "/storage/emulated/0/Download/Roms",
-            "/storage/emulated/0/RetroArch/roms",
-            "/storage/emulated/0/ElysiumConsole/roms"
+            "md", "gen", "zip"
         )
     }
 
     /**
-     * Scans the entire external storage for ROM files.
-     * Starts from the root to ensure no game is left behind.
-     *
-     * @return List of discovered ROM files with platform auto-detection
+     * Scans multiple storage nodes (Directories or SAF URIs).
      */
-    suspend fun scanForRoms(): List<RomFile> = withContext(Dispatchers.IO) {
-        val root = File("/storage/emulated/0")
-        val roms = mutableListOf<RomFile>()
-        if (root.exists() && root.isDirectory) {
-            scanDirectory(root, roms)
+    suspend fun scanFolders(paths: List<String>): List<RomFile> = withContext(Dispatchers.IO) {
+        val allRoms = mutableListOf<RomFile>()
+        paths.forEach { path ->
+            if (path.startsWith("content://")) {
+                scanDocumentTree(Uri.parse(path), allRoms)
+            } else {
+                val dir = File(path)
+                if (dir.exists() && dir.isDirectory) {
+                    scanDirectoryRecursive(dir, allRoms)
+                }
+            }
         }
-        roms.sortedBy { it.name.lowercase() }
+        
+        // Final consolidation: Group Multi-Disc sets and unique entries
+        groupMultiDiscRoms(allRoms.distinctBy { it.path }).sortedBy { it.name.lowercase() }
     }
 
     /**
-     * Scans a directory path for ROM files.
-     * Implements the domain RomRepository contract.
+     * Identifies games with multiple discs and collapses them into a single entry.
      */
-    override suspend fun scanDirectory(path: String): List<RomFile> = withContext(Dispatchers.IO) {
-        val roms = mutableListOf<RomFile>()
+    private fun groupMultiDiscRoms(roms: List<RomFile>): List<RomFile> {
+        val grouped = mutableMapOf<String, MutableList<RomFile>>()
+        val result = mutableListOf<RomFile>()
 
-        SCAN_DIRECTORIES.forEach { dirPath ->
-            val dir = File(dirPath)
-            if (dir.exists() && dir.isDirectory) {
-                scanDirectory(dir, roms)
+        roms.forEach { rom ->
+            // Match patterns like "Game (Disc 1)", "Game (Disk A)", "Game (CD 1)"
+            val baseName = rom.name.replace(Regex("\\((Disc|Disk|CD|Side)\\s*[\\w\\d]+\\)", RegexOption.IGNORE_CASE), "").trim()
+            if (baseName != rom.name) {
+                grouped.getOrPut(baseName) { mutableListOf() }.add(rom)
+            } else {
+                result.add(rom)
             }
         }
 
-        roms.sortedBy { it.name.lowercase() }
+        grouped.forEach { (baseName, discs) ->
+            val first = discs.sortedBy { it.name.lowercase() }.first()
+            result.add(
+                first.copy(
+                    name = baseName,
+                    isMultiDisc = true,
+                    discPaths = discs.sortedBy { it.name.lowercase() }.map { it.path }
+                )
+            )
+        }
+
+        return result
     }
 
     /**
-     * Scans a specific directory (recursively) for ROM files.
-     *
-     * @param directory Directory to scan
-     * @param customDirectories Additional directories to include
-     * @return List of discovered ROM files
+     * Contract implementation: Scans a single directory.
      */
-    suspend fun scanDirectory(
-        directory: File,
-        accumulator: MutableList<RomFile> = mutableListOf()
-    ): List<RomFile> = withContext(Dispatchers.IO) {
-        if (!directory.exists() || !directory.isDirectory) {
-            return@withContext accumulator
+    override suspend fun scanDirectory(path: String): List<RomFile> = withContext(Dispatchers.IO) {
+        val roms = mutableListOf<RomFile>()
+        if (path.startsWith("content://")) {
+            scanDocumentTree(Uri.parse(path), roms)
+        } else {
+            val dir = File(path)
+            if (dir.exists() && dir.isDirectory) {
+                scanDirectoryRecursive(dir, roms)
+            }
         }
+        groupMultiDiscRoms(roms).sortedBy { it.name.lowercase() }
+    }
 
-        directory.listFiles()?.forEach { file ->
-            if (file.isDirectory) {
-                scanDirectory(file, accumulator)
+    /**
+     * MODERN SCAN: Traverses SAF Document Trees for Scoped Storage.
+     */
+    private fun scanDocumentTree(uri: Uri, accumulator: MutableList<RomFile>) {
+        val root = DocumentFile.fromTreeUri(context, uri) ?: return
+        scanDocumentFileRecursive(root, accumulator)
+    }
+
+    private fun scanDocumentFileRecursive(directory: DocumentFile, accumulator: MutableList<RomFile>) {
+        if (!directory.isDirectory) return
+        
+        for (doc in directory.listFiles()) {
+            if (doc.isDirectory) {
+                if (!doc.name.orEmpty().startsWith(".")) {
+                    scanDocumentFileRecursive(doc, accumulator)
+                }
             } else {
-                val ext = file.extension.lowercase()
-                if (ext in ROM_EXTENSIONS) {
-                    val platform = Platform.fromExtension(ext)
+                val name = doc.name.orEmpty()
+                val extension = name.substringAfterLast('.', "").lowercase()
+                
+                if (extension in ROM_EXTENSIONS) {
+                    // Filter ghost files
+                    if (doc.length() < MIN_GAME_SIZE_BYTES) continue
+
+                    val platform = Platform.fromExtension(extension)
                     if (platform != null) {
-                        accumulator.add(
-                            RomFile(
-                                id = generateId(file.absolutePath),
-                                name = file.nameWithoutExtension
-                                    .replace("_", " ")
-                                    .replace("-", " "),
-                                path = file.absolutePath,
-                                platform = platform,
-                                fileSizeBytes = file.length(),
-                                lastPlayed = 0L,
-                                playCount = 0
-                            )
+                        val rom = RomFile(
+                            id = generateId(doc.uri.toString()),
+                            name = name.substringBeforeLast('.')
+                                .replace("_", " ")
+                                .replace("-", " ")
+                                .trim(),
+                            path = doc.uri.toString(),
+                            platform = platform,
+                            fileSizeBytes = doc.length(),
+                            lastPlayed = 0L,
+                            playCount = 0
                         )
+                        accumulator.add(MetadataScraper.enrich(rom))
                     }
                 }
             }
         }
-
-        accumulator
     }
 
     /**
-     * Generates a deterministic ID from the file path using MD5 hash.
+     * LEGACY SCAN: Traverses standard filesystem directories.
      */
+    private fun scanDirectoryRecursive(directory: File, accumulator: MutableList<RomFile>) {
+        val files = directory.listFiles() ?: return
+        for (file in files) {
+            if (file.isDirectory) {
+                if (!file.name.startsWith(".")) {
+                    scanDirectoryRecursive(file, accumulator)
+                }
+            } else {
+                val extension = file.extension.lowercase()
+                if (extension in ROM_EXTENSIONS) {
+                    if (file.length() < MIN_GAME_SIZE_BYTES) continue
+
+                    val platform = Platform.fromExtension(extension)
+                    if (platform != null) {
+                    val rom = RomFile(
+                        id = generateId(file.absolutePath),
+                        name = file.nameWithoutExtension
+                            .replace("_", " ")
+                            .replace("-", " ")
+                            .trim(),
+                        path = file.absolutePath,
+                        platform = platform,
+                        fileSizeBytes = file.length(),
+                        lastPlayed = 0L,
+                        playCount = 0
+                    )
+                    accumulator.add(MetadataScraper.enrich(rom))
+                    }
+                }
+            }
+        }
+    }
+
     private fun generateId(path: String): String {
         val digest = MessageDigest.getInstance("MD5")
         val hash = digest.digest(path.toByteArray())

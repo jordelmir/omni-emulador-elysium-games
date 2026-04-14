@@ -1,5 +1,8 @@
 package com.elysium.console.viewmodel
 
+import android.content.Context
+import android.net.Uri
+import android.os.ParcelFileDescriptor
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.elysium.console.bridge.ElysiumBridge
@@ -30,6 +33,7 @@ import com.elysium.console.domain.usecase.SelectCoreUseCase
  * - Graceful shutdown and resource cleanup
  */
 class EmulationViewModel(
+    private val context: Context,
     private val hardwareMonitor: HardwareMonitor,
     private val selectCoreUseCase: SelectCoreUseCase
 ) : ViewModel() {
@@ -41,6 +45,7 @@ class EmulationViewModel(
     val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
 
     private var emulationJob: Job? = null
+    private var romFileDescriptor: ParcelFileDescriptor? = null
 
     private val telemetryAgent = TelemetryAgentUseCase(
         hardwareMonitor = hardwareMonitor,
@@ -100,15 +105,44 @@ class EmulationViewModel(
                 return@launch
             }
 
-            val loadedRom = ElysiumBridge.nativeLoadRom(romPath)
-            if (!loadedRom) {
-                _isRunning.value = false
-                return@launch
-            }
+            loadRom(romPath)
+        }
+    }
 
-            // Enter the emulation loop
-            while (isActive && _isRunning.value) {
-                ElysiumBridge.nativeRunFrame()
+    fun loadRom(path: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _isLoading.value = true
+            try {
+                // Find the ROM in our library to check for multi-disc status
+                // (In a real app, we'd pass the RomFile object or use a repository lookup)
+                
+                var actualPath = path
+                // Multi-disc support: Generate .m3u for grouped discs
+                if (path.contains("content://") && path.endsWith(".m3u")) {
+                    // Logic to handle virtual m3u if needed
+                }
+
+                val uri = Uri.parse(path)
+                val pfd: ParcelFileDescriptor? = context.contentResolver.openFileDescriptor(uri, "r")
+                
+                if (pfd != null) {
+                    val fd = pfd.detachFd()
+                    val success = ElysiumBridge.nativeLoadRom(path, fd)
+                    if (success) {
+                        _isRunning.value = true
+                        
+                        // QUICKSTATE: Attempt to auto-load the last session
+                        val saveFile = File(context.filesDir, "saves/auto_${generateSafeName(path)}.state")
+                        if (saveFile.exists()) {
+                            ElysiumBridge.nativeLoadState(saveFile.absolutePath)
+                        }
+                        
+                        // Enter the emulation loop
+                        while (isActive && _isRunning.value) {
+                            ElysiumBridge.nativeRunFrame()
+                            delay(1L)
+                        }
+                    }
 
                 // Yield to prevent thread starvation
                 // The actual frame pacing is handled by the core's vsync
@@ -128,6 +162,8 @@ class EmulationViewModel(
 
         viewModelScope.launch(Dispatchers.IO) {
             ElysiumBridge.nativeShutdown()
+            romFileDescriptor?.close()
+            romFileDescriptor = null
         }
     }
 

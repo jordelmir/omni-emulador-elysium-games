@@ -20,7 +20,12 @@ data class RomFile(
     val coverArtPath: String = "",
     val lastPlayed: Long = 0L,
     val playCount: Int = 0,
-    val fileSizeBytes: Long = 0L
+    val fileSizeBytes: Long = 0L,
+    val isMultiDisc: Boolean = false,
+    val discPaths: List<String> = emptyList(),
+    val year: String = "",
+    val genre: String = "",
+    val description: String = ""
 ) {
     /**
      * Returns a human-readable file size string (e.g., "256 MB").

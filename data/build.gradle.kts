@@ -30,6 +30,7 @@ dependencies {
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.androidx.documentfile)
 
     // Shizuku — Privileged Shell Access
     implementation(libs.shizuku.api)
